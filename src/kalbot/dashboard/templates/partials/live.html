@@ -1,0 +1,165 @@
+{% set fh = m.feed_health %}
+{% set w = m.window %}
+
+<!-- Feed Health -->
+<section>
+  <h2>Feed Health</h2>
+  <div class="grid3">
+    <div class="card">
+      <div class="card-title">Chainlink</div>
+      <div>
+        {% if fh.chainlink_ok and not fh.chainlink_stale %}
+          <span class="badge badge-green">OK</span>
+        {% elif fh.chainlink_stale %}
+          <span class="badge badge-yellow">STALE</span>
+        {% else %}
+          <span class="badge badge-red">DOWN</span>
+        {% endif %}
+        {% if fh.chainlink_last_update %}
+          <span class="muted"> {{ fh.chainlink_last_update.strftime('%H:%M:%S') }}</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Spot ({{ fh.spot_source }})</div>
+      <div>
+        {% if fh.spot_ok %}
+          <span class="badge badge-green">OK</span>
+        {% else %}
+          <span class="badge badge-red">DOWN</span>
+        {% endif %}
+        {% if fh.spot_last_update %}
+          <span class="muted"> {{ fh.spot_last_update.strftime('%H:%M:%S') }}</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Polymarket ({{ fh.polymarket_markets }} markets)</div>
+      <div>
+        {% if fh.polymarket_ok %}
+          <span class="badge badge-green">OK</span>
+        {% else %}
+          <span class="badge badge-red">DOWN</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Current Window -->
+<section>
+  <h2>Current Window</h2>
+  {% if w.market_id %}
+  <div class="card" style="margin-bottom:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <span style="color:var(--muted);font-size:11px">{{ w.question }}</span>
+      {% if w.signal == 'YES' %}
+        <span class="badge badge-green">YES</span>
+      {% elif w.signal == 'NO' %}
+        <span class="badge badge-red">NO</span>
+      {% else %}
+        <span class="badge badge-muted">PASS</span>
+      {% endif %}
+    </div>
+    <!-- Time bar -->
+    <div style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:3px">
+        <span>{{ w.elapsed_seconds }}s elapsed</span>
+        <span>{{ w.remaining_seconds }}s remaining</span>
+      </div>
+      {% set pct = [[(w.elapsed_seconds / 300 * 100)|int, 0]|max, 100]|min %}
+      <div class="progress-bar">
+        <div class="progress-bar-fill" style="width:{{ pct }}%"></div>
+      </div>
+    </div>
+    <div class="grid4">
+      <div>
+        <div class="card-title">BTC Price</div>
+        <div class="card-value">${{ "{:,.0f}".format(w.current_price) }}</div>
+      </div>
+      <div>
+        <div class="card-title">Displacement</div>
+        <div class="card-value {% if w.displacement_pct > 0 %}pos{% elif w.displacement_pct < 0 %}neg{% endif %}">
+          {{ "{:+.3f}".format(w.displacement_pct) }}%
+        </div>
+      </div>
+      <div>
+        <div class="card-title">Mid Price</div>
+        <div class="card-value">{{ "{:.3f}".format(w.mid_price) }}</div>
+      </div>
+      <div>
+        <div class="card-title">Direction</div>
+        <div class="card-value">
+          {% if w.direction == 1 %}▲{% elif w.direction == -1 %}▼{% else %}—{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="card muted" style="text-align:center;padding:30px">No active window</div>
+  {% endif %}
+</section>
+
+<!-- Positions -->
+<section>
+  <h2>Active Positions ({{ m.active_positions|length }})</h2>
+  {% if m.active_positions %}
+  <div class="card">
+    <table>
+      <thead><tr><th>Window</th><th>Side</th><th>Entry</th><th>Size</th><th>Opened</th></tr></thead>
+      <tbody>
+        {% for p in m.active_positions %}
+        <tr>
+          <td class="muted">{{ p.window_id[-12:] }}</td>
+          <td>
+            {% if p.side == 'YES' %}<span class="badge badge-green">YES</span>
+            {% else %}<span class="badge badge-red">NO</span>{% endif %}
+          </td>
+          <td>{{ "{:.4f}".format(p.entry_price) }}</td>
+          <td>${{ "{:.2f}".format(p.size_usd) }}</td>
+          <td class="muted">{{ p.opened_at.strftime('%H:%M:%S') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card muted" style="text-align:center;padding:16px">No open positions</div>
+  {% endif %}
+</section>
+
+<!-- Today Stats -->
+<section>
+  <h2>Today</h2>
+  <div class="grid4">
+    <div class="card">
+      <div class="card-title">P&amp;L</div>
+      <div class="card-value {% if m.today_pnl > 0 %}pos{% elif m.today_pnl < 0 %}neg{% endif %}">
+        ${{ "{:+.2f}".format(m.today_pnl) }}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Trades</div>
+      <div class="card-value">{{ m.today_trades }}</div>
+    </div>
+    <div class="card">
+      <div class="card-title">W / L</div>
+      <div class="card-value"><span class="pos">{{ m.today_wins }}</span> / <span class="neg">{{ m.today_losses }}</span></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Circuit Breaker</div>
+      <div>
+        {% if m.circuit_breaker_active %}
+          <span class="badge badge-red">TRIPPED</span>
+          <div class="muted" style="font-size:10px;margin-top:4px">{{ m.circuit_breaker_reason }}</div>
+        {% else %}
+          <span class="badge badge-green">OK</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="muted" style="font-size:10px;text-align:right;margin-top:8px">
+  Updated {{ m.updated_at.strftime('%H:%M:%S UTC') }}
+</div>

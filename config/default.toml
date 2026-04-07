@@ -1,0 +1,44 @@
+[feeds]
+chainlink_ws_url = "wss://ws-live-data.polymarket.com"
+chainlink_ping_interval_s = 5
+chainlink_stale_threshold_s = 10
+spot_sources = ["coinbase", "kraken"]
+spot_poll_interval_s = 2.0
+gamma_api_url = "https://gamma-api.polymarket.com"
+clob_api_url = "https://clob.polymarket.com"
+market_discovery_interval_s = 30
+market_series_ticker = "btc-up-or-down-5m"
+chainlink_source = "coinbase_rest"
+chainlink_poll_interval_s = 1.0
+
+[engine]
+min_elapsed_seconds = 60
+max_elapsed_seconds = 270
+min_displacement_pct = 0.02
+min_direction_consistency = 0.60
+max_cross_count = 6
+min_time_above_yes = 0.55
+max_time_above_no = 0.45
+spot_trend_conflict_threshold = 0.0008
+require_spot_confirmation = true
+
+[execution]
+mode = "paper"
+default_order_size_usd = 10.0
+maker_timeout_seconds = 30
+taker_threshold_seconds = 60
+cancel_on_reversal = true
+
+[risk]
+max_position_usd = 25.0
+max_daily_loss_usd = 15.0
+max_drawdown_pct = 15.0
+max_concurrent_positions = 2
+min_edge_pct = 3.0
+starting_bankroll_usd = 100.0
+
+[data]
+db_path = "data/kalbot.db"
+log_all_windows = true
+tick_logging = true
+snapshot_at_seconds = [120, 150, 180, 210, 240]

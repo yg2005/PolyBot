@@ -1,0 +1,17 @@
+[Unit]
+Description=KalBot Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=kalbot
+WorkingDirectory=/opt/kalbot
+ExecStart=/opt/kalbot/.venv/bin/python -m kalbot.main
+Restart=always
+RestartSec=5
+Environment=KALBOT_ENV=paper
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

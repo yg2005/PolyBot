@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% set page = "settings" %}
+{% block title %}— Settings{% endblock %}
+{% block extra_style %}
+<style>
+  .cfg-table { width:100%; }
+  .cfg-table td:first-child { color: var(--muted); width: 40%; }
+  .cfg-table td:last-child { font-weight: 600; }
+  .section-sep { height: 1px; background: var(--border); margin: 10px 0; }
+  .danger-btn {
+    background: rgba(248,81,73,.12); color: var(--red); border: 1px solid rgba(248,81,73,.3);
+    padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 12px;
+    font-family: inherit;
+  }
+  .danger-btn:hover { background: rgba(248,81,73,.25); }
+  .safe-btn {
+    background: rgba(88,166,255,.12); color: var(--blue); border: 1px solid rgba(88,166,255,.3);
+    padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 12px;
+    font-family: inherit;
+  }
+  .safe-btn:hover { background: rgba(88,166,255,.25); }
+  #action-result { margin-top: 8px; font-size: 11px; }
+</style>
+{% endblock %}
+{% block content %}
+
+{% if m.circuit_breaker_active %}
+<div style="background:rgba(248,81,73,.1);border:1px solid var(--red);border-radius:6px;padding:12px;margin-bottom:16px;color:var(--red)">
+  ⛔ Circuit breaker active: {{ m.circuit_breaker_reason }}
+</div>
+{% endif %}
+
+<section>
+  <h2>Config (read-only)</h2>
+  <div class="grid2">
+
+    <div class="card">
+      <h3>Feeds</h3>
+      <table class="cfg-table">
+        <tr><td>Gamma URL</td><td>{{ cfg.feeds.gamma_api_url }}</td></tr>
+        <tr><td>CLOB URL</td><td>{{ cfg.feeds.clob_api_url }}</td></tr>
+        <tr><td>Series</td><td>{{ cfg.feeds.market_series_ticker }}</td></tr>
+        <tr><td>Spot sources</td><td>{{ cfg.feeds.spot_sources|join(', ') }}</td></tr>
+        <tr><td>Stale threshold</td><td>{{ cfg.feeds.chainlink_stale_threshold_s }}s</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>Engine</h3>
+      <table class="cfg-table">
+        <tr><td>Scorer</td><td>{{ cfg.engine.scorer }}</td></tr>
+        <tr><td>Min elapsed</td><td>{{ cfg.engine.min_elapsed_seconds }}s</td></tr>
+        <tr><td>Max elapsed</td><td>{{ cfg.engine.max_elapsed_seconds }}s</td></tr>
+        <tr><td>Min displacement</td><td>{{ cfg.engine.min_displacement_pct }}%</td></tr>
+        <tr><td>Min dir consistency</td><td>{{ cfg.engine.min_direction_consistency }}</td></tr>
+        <tr><td>Require spot confirm</td><td>{{ cfg.engine.require_spot_confirmation }}</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>Execution</h3>
+      <table class="cfg-table">
+        <tr><td>Mode</td><td>
+          {% if cfg.execution.mode == 'paper' %}
+            <span class="badge badge-blue">PAPER</span>
+          {% else %}
+            <span class="badge badge-red">LIVE</span>
+          {% endif %}
+        </td></tr>
+        <tr><td>Order size</td><td>${{ cfg.execution.default_order_size_usd }}</td></tr>
+        <tr><td>Maker timeout</td><td>{{ cfg.execution.maker_timeout_seconds }}s</td></tr>
+        <tr><td>Taker threshold</td><td>{{ cfg.execution.taker_threshold_seconds }}s</td></tr>
+        <tr><td>Cancel on reversal</td><td>{{ cfg.execution.cancel_on_reversal }}</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>Risk</h3>
+      <table class="cfg-table">
+        <tr><td>Max position</td><td>${{ cfg.risk.max_position_usd }}</td></tr>
+        <tr><td>Max daily loss</td><td>${{ cfg.risk.max_daily_loss_usd }}</td></tr>
+        <tr><td>Max drawdown</td><td>{{ cfg.risk.max_drawdown_pct }}%</td></tr>
+        <tr><td>Max concurrent</td><td>{{ cfg.risk.max_concurrent_positions }}</td></tr>
+        <tr><td>Min edge</td><td>{{ cfg.risk.min_edge_pct }}%</td></tr>
+        <tr><td>Starting bankroll</td><td>${{ cfg.risk.starting_bankroll_usd }}</td></tr>
+      </table>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <h2>Actions</h2>
+  <div class="card">
+    <div style="display:flex;gap:12px;align-items:center">
+      <button class="danger-btn"
+        hx-post="/settings/kill"
+        hx-target="#action-result"
+        hx-swap="innerHTML"
+        onclick="return confirm('Activate kill switch? Trading will halt immediately.')">
+        Kill Switch
+      </button>
+      <button class="safe-btn"
+        hx-post="/settings/retrain"
+        hx-target="#action-result"
+        hx-swap="innerHTML">
+        Trigger Retrain
+      </button>
+      <span class="muted" style="font-size:11px">Kill switch halts trading immediately. Retrain queues a background job.</span>
+    </div>
+    <div id="action-result"></div>
+  </div>
+</section>
+
+{% endblock %}

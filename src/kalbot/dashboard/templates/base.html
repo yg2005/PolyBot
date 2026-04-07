@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KalBot {% block title %}{% endblock %}</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <style>
+    :root {
+      --bg: #0d1117; --bg2: #161b22; --bg3: #21262d;
+      --border: #30363d; --text: #e6edf3; --muted: #8b949e;
+      --green: #3fb950; --red: #f85149; --yellow: #d29922;
+      --blue: #58a6ff; --purple: #bc8cff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'SF Mono', 'Cascadia Code', monospace; background: var(--bg); color: var(--text); font-size: 13px; }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    nav { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 0 16px; display: flex; align-items: center; gap: 24px; height: 44px; }
+    nav .brand { font-weight: 700; color: var(--text); font-size: 15px; letter-spacing: 1px; }
+    nav a { color: var(--muted); font-size: 13px; }
+    nav a.active, nav a:hover { color: var(--text); }
+
+    main { max-width: 1200px; margin: 0 auto; padding: 20px 16px; }
+
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+
+    .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 14px; }
+    .card-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+    .card-value { font-size: 22px; font-weight: 700; }
+
+    .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+    .badge-green { background: rgba(63,185,80,.15); color: var(--green); }
+    .badge-red { background: rgba(248,81,73,.15); color: var(--red); }
+    .badge-yellow { background: rgba(210,153,34,.15); color: var(--yellow); }
+    .badge-blue { background: rgba(88,166,255,.15); color: var(--blue); }
+    .badge-muted { background: var(--bg3); color: var(--muted); }
+
+    .progress-bar { background: var(--bg3); border-radius: 3px; height: 8px; overflow: hidden; }
+    .progress-bar-fill { height: 100%; background: var(--blue); border-radius: 3px; transition: width .3s; }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+    tr:last-child td { border-bottom: none; }
+
+    .pos { color: var(--green); }
+    .neg { color: var(--red); }
+    .muted { color: var(--muted); }
+
+    section { margin-bottom: 20px; }
+    h2 { font-size: 14px; font-weight: 600; margin-bottom: 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+    h3 { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 8px; }
+  </style>
+  {% block extra_style %}{% endblock %}
+</head>
+<body>
+<nav>
+  <span class="brand">⚡ KalBot</span>
+  <a href="/" {% if page=='live' %}class="active"{% endif %}>Live</a>
+  <a href="/performance" {% if page=='performance' %}class="active"{% endif %}>Performance</a>
+  <a href="/data" {% if page=='data' %}class="active"{% endif %}>Data</a>
+  <a href="/model" {% if page=='model' %}class="active"{% endif %}>Model</a>
+  <a href="/settings" {% if page=='settings' %}class="active"{% endif %}>Settings</a>
+</nav>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

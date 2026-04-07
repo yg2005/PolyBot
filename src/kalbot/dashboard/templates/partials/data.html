@@ -1,0 +1,91 @@
+{% set pct = [(m.windows_collected / m.windows_target * 100)|int, 100]|min %}
+
+<section>
+  <h2>ML Training Progress</h2>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+      <span>{{ m.windows_collected }} / {{ m.windows_target }} settled windows</span>
+      <span class="{% if pct >= 100 %}pos{% else %}muted{% endif %}">{{ pct }}%</span>
+    </div>
+    <div class="progress-bar" style="height:12px">
+      <div class="progress-bar-fill" style="width:{{ pct }}%;background:{% if pct >= 100 %}var(--green){% elif pct >= 50 %}var(--blue){% else %}var(--yellow){% endif %}"></div>
+    </div>
+    {% if pct >= 100 %}
+    <div class="badge badge-green" style="margin-top:8px">Ready for training</div>
+    {% endif %}
+  </div>
+</section>
+
+<section>
+  <h2>Feature Distribution (all settled windows)</h2>
+  {% if dist and dist.total %}
+  <div class="grid4">
+    <div class="card">
+      <div class="card-title">Total Windows</div>
+      <div class="card-value">{{ dist.total }}</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Traded</div>
+      <div class="card-value">{{ dist.traded_count or 0 }}</div>
+      <div class="muted" style="font-size:10px">
+        {{ "{:.1f}".format((dist.traded_count or 0) / dist.total * 100) }}% trade rate
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">YES Outcomes</div>
+      <div class="card-value pos">{{ dist.yes_count or 0 }}</div>
+      <div class="muted" style="font-size:10px">
+        {{ "{:.1f}".format((dist.yes_count or 0) / dist.total * 100) }}%
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">NO Outcomes</div>
+      <div class="card-value neg">{{ dist.no_count or 0 }}</div>
+      <div class="muted" style="font-size:10px">
+        {{ "{:.1f}".format((dist.no_count or 0) / dist.total * 100) }}%
+      </div>
+    </div>
+  </div>
+  <div class="grid3" style="margin-top:12px">
+    <div class="card">
+      <div class="card-title">Avg Displacement</div>
+      <div class="card-value">{{ "{:.3f}".format(dist.avg_disp or 0) }}%</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Avg Dir Consistency</div>
+      <div class="card-value">{{ "{:.3f}".format(dist.avg_dir_con or 0) }}</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Avg Elapsed</div>
+      <div class="card-value">{{ "{:.0f}".format(dist.avg_elapsed or 0) }}s</div>
+    </div>
+  </div>
+  {% else %}
+  <div class="card muted" style="text-align:center;padding:20px">No settled windows yet</div>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Session Stats</h2>
+  <div class="grid3">
+    <div class="card">
+      <div class="card-title">Session Windows</div>
+      <div class="card-value">{{ m.session_windows }}</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Scorer Mode</div>
+      <div class="card-value">{{ m.scorer_mode }}</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Model Active</div>
+      <div>
+        {% if m.model_active %}
+          <span class="badge badge-green">YES</span>
+          <span class="muted"> {{ m.model_id or '' }}</span>
+        {% else %}
+          <span class="badge badge-muted">NO</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</section>

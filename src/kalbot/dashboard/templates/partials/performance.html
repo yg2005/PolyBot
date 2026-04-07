@@ -1,0 +1,100 @@
+<!-- Daily P&L table -->
+<section>
+  <h2>Daily P&amp;L (last 30 days)</h2>
+  {% if stats %}
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th><th>Windows</th><th>Trades</th>
+          <th>W/L</th><th>Gross P&amp;L</th><th>Net P&amp;L</th>
+          <th>Win Rate</th><th>Fill Rate</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in stats %}
+        <tr>
+          <td>{{ s.date }}</td>
+          <td class="muted">{{ s.total_windows }}</td>
+          <td>{{ s.traded_windows }}</td>
+          <td>
+            <span class="pos">{{ s.wins }}</span> /
+            <span class="neg">{{ s.losses }}</span>
+          </td>
+          <td class="{% if s.gross_pnl > 0 %}pos{% elif s.gross_pnl < 0 %}neg{% endif %}">
+            ${{ "{:+.2f}".format(s.gross_pnl or 0) }}
+          </td>
+          <td class="{% if s.net_pnl > 0 %}pos{% elif s.net_pnl < 0 %}neg{% endif %}">
+            ${{ "{:+.2f}".format(s.net_pnl or 0) }}
+          </td>
+          <td>
+            {% if s.traded_windows %}
+              {{ "{:.0f}".format(s.wins / s.traded_windows * 100 if s.traded_windows else 0) }}%
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+          <td>{{ "{:.0f}".format((s.fill_rate or 0) * 100) }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card muted" style="text-align:center;padding:20px">No daily stats yet</div>
+  {% endif %}
+</section>
+
+<!-- Cumulative P&L chart (pure CSS sparkline) -->
+{% if stats %}
+<section>
+  <h2>Cumulative P&amp;L</h2>
+  <div class="card">
+    {% set cumulative = namespace(val=0) %}
+    <div style="display:flex;align-items:flex-end;gap:2px;height:60px;padding:4px 0">
+      {% for s in stats|reverse %}
+        {% set cumulative.val = cumulative.val + (s.net_pnl or 0) %}
+        <div title="{{ s.date }}: {{ '{:+.2f}'.format(cumulative.val) }}"
+             style="flex:1;background:{% if cumulative.val >= 0 %}var(--green){% else %}var(--red){% endif %};
+                    height:{{ [[(cumulative.val|abs / 10 * 50)|int, 4]|max, 60]|min }}px;
+                    border-radius:2px 2px 0 0;opacity:.8">
+        </div>
+      {% endfor %}
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:4px">
+      {{ stats[-1].date if stats else '' }} → {{ stats[0].date if stats else '' }}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<!-- Weekly edge tracker -->
+<section>
+  <h2>Weekly Edge Tracker</h2>
+  {% if weekly %}
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>Week</th><th>Realized Edge</th><th>Predicted Edge</th>
+          <th>Efficiency Score</th><th>Trades</th><th>Win Rate</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for w in weekly %}
+        <tr>
+          <td>{{ w.week_start }}</td>
+          <td class="{% if (w.realized_edge or 0) > 0 %}pos{% else %}neg{% endif %}">
+            {{ "{:+.4f}".format(w.realized_edge or 0) }}
+          </td>
+          <td>{{ "{:.4f}".format(w.predicted_edge or 0) }}</td>
+          <td class="muted">{{ "{:.4f}".format(w.market_efficiency_score or 0) }}</td>
+          <td>{{ w.trade_count or 0 }}</td>
+          <td>{{ "{:.0f}".format((w.win_rate or 0) * 100) }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card muted" style="text-align:center;padding:20px">No weekly data yet</div>
+  {% endif %}
+</section>

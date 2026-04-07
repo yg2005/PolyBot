@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% set page = "live" %}
+{% block title %}— Live{% endblock %}
+{% block content %}
+<div
+  id="live-panel"
+  hx-get="/htmx/live"
+  hx-trigger="every {{ poll_ms }}ms"
+  hx-swap="innerHTML"
+>
+  {% include "partials/live.html" %}
+</div>
+{% endblock %}

@@ -1,0 +1,144 @@
+{% if model %}
+<section>
+  <h2>Active Model</h2>
+  <div class="grid4">
+    <div class="card">
+      <div class="card-title">Model ID</div>
+      <div style="font-size:11px;word-break:break-all">{{ model.model_id }}</div>
+    </div>
+    <div class="card">
+      <div class="card-title">AUC-ROC</div>
+      <div class="card-value {% if (model.auc_score or 0) >= 0.6 %}pos{% else %}neg{% endif %}">
+        {{ "{:.4f}".format(model.auc_score or 0) }}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Calibration Error (ECE)</div>
+      <div class="card-value {% if (model.calibration_error or 1) < 0.05 %}pos{% else %}neg{% endif %}">
+        {{ "{:.4f}".format(model.calibration_error or 0) }}
+        <span class="muted" style="font-size:11px"> (target &lt;0.05)</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Training Samples</div>
+      <div class="card-value">{{ model.training_samples or 0 }}</div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:10px">
+    <div class="card-title">Trained At</div>
+    <div>{{ model.trained_at or '—' }}</div>
+  </div>
+</section>
+
+<!-- Feature Importance -->
+{% if model.feature_importance %}
+<section>
+  <h2>Feature Importance (top {{ model.feature_importance|length }})</h2>
+  <div class="card">
+    {% set max_imp = model.feature_importance.values()|list|max %}
+    {% for feat, score in model.feature_importance.items()|sort(attribute='1', reverse=True) %}
+    <div style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px">
+        <span>{{ feat }}</span>
+        <span class="muted">{{ "{:.4f}".format(score) }}</span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-bar-fill"
+             style="width:{{ (score / max_imp * 100)|int }}%;background:var(--purple)">
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% elif model.features_list %}
+<section>
+  <h2>Features Used</h2>
+  <div class="card">
+    <div style="display:flex;flex-wrap:wrap;gap:6px">
+      {% for f in model.features_list %}
+        <span class="badge badge-blue">{{ f }}</span>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+{% else %}
+<section>
+  <h2>Model</h2>
+  <div class="card muted" style="text-align:center;padding:30px">
+    <div style="font-size:14px;margin-bottom:8px">No active model</div>
+    <div style="font-size:11px">Train a model once 500+ windows are collected.</div>
+  </div>
+</section>
+{% endif %}
+
+<!-- Backtest -->
+<section>
+  <h2>Backtest (live trading history)</h2>
+  {% if backtest and backtest.trading_days %}
+  <div class="grid4">
+    <div class="card">
+      <div class="card-title">Total P&amp;L</div>
+      <div class="card-value {% if backtest.total_pnl > 0 %}pos{% elif backtest.total_pnl < 0 %}neg{% endif %}">
+        ${{ "{:+.2f}".format(backtest.total_pnl) }}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Win Rate</div>
+      <div class="card-value {% if backtest.win_rate >= 0.5 %}pos{% else %}neg{% endif %}">
+        {{ "{:.0f}".format(backtest.win_rate * 100) }}%
+      </div>
+      <div class="muted" style="font-size:10px">{{ backtest.total_wins }}W / {{ backtest.total_losses }}L</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Best Day</div>
+      <div class="card-value pos">${{ "{:+.2f}".format(backtest.best_day) }}</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Worst Day</div>
+      <div class="card-value neg">${{ "{:+.2f}".format(backtest.worst_day) }}</div>
+    </div>
+  </div>
+  <div class="grid3" style="margin-top:10px">
+    <div class="card">
+      <div class="card-title">Trading Days</div>
+      <div class="card-value">{{ backtest.trading_days }}</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Total Trades</div>
+      <div class="card-value">{{ backtest.total_trades }}</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Avg Daily P&amp;L</div>
+      <div class="card-value {% if backtest.avg_daily_pnl > 0 %}pos{% elif backtest.avg_daily_pnl < 0 %}neg{% endif %}">
+        ${{ "{:+.4f}".format(backtest.avg_daily_pnl) }}
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="card muted" style="text-align:center;padding:20px">No trading history yet</div>
+  {% endif %}
+</section>
+
+<!-- Scorer -->
+<section>
+  <h2>Scorer</h2>
+  <div class="grid3">
+    <div class="card">
+      <div class="card-title">Mode</div>
+      <div class="card-value">{{ m.scorer_mode }}</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Model AUC (live)</div>
+      <div class="card-value {% if m.model_auc and m.model_auc >= 0.6 %}pos{% else %}muted{% endif %}">
+        {{ "{:.4f}".format(m.model_auc) if m.model_auc else '—' }}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Model ID (live)</div>
+      <div style="font-size:11px">{{ m.model_id or '—' }}</div>
+    </div>
+  </div>
+</section>

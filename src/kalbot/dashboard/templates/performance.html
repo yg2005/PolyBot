@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% set page = "performance" %}
+{% block title %}— Performance{% endblock %}
+{% block content %}
+<div
+  id="perf-panel"
+  hx-get="/htmx/performance"
+  hx-trigger="every {{ poll_ms }}ms"
+  hx-swap="innerHTML"
+>
+  {% include "partials/performance.html" %}
+</div>
+{% endblock %}
