@@ -74,9 +74,8 @@ class KalBot:
         self._spot_source: str = "none"
 
         # feeds_ready: all three feeds must have ≥1 update before scoring
-        self._chainlink_ready: bool = False
-        self._spot_ready: bool = False
         self._polymarket_ready: bool = False
+        self._feeds_ready_logged: bool = False  # guards the first-time log
 
         self._metrics = MetricsCollector()
         self._alerts: AlertManager | None = None
@@ -100,8 +99,24 @@ class KalBot:
 
     @property
     def _feeds_ready(self) -> bool:
-        """True only when all three feeds have delivered ≥1 update."""
-        return self._chainlink_ready and self._spot_ready and self._polymarket_ready
+        """True only when all three feeds have delivered ≥1 update.
+
+        Derived directly from each feed's _last_update_time so readiness is
+        guaranteed the moment a price lands in _emit(), independent of whether
+        the _on_price callback chain fires without error.
+        """
+        cl_ready = self._chainlink is not None and self._chainlink._last_update_time is not None
+        sp_ready = self._spot is not None and self._spot._last_update_time is not None
+        if cl_ready and sp_ready and self._polymarket_ready and not self._feeds_ready_logged:
+            self._feeds_ready_logged = True
+            log.info(
+                "feeds_ready — chainlink last=%.2fs ago, spot last=%.2fs ago, polymarket ready",
+                (datetime.now(timezone.utc) - self._chainlink._last_update_time).total_seconds()
+                if self._chainlink and self._chainlink._last_update_time else -1,
+                (datetime.now(timezone.utc) - self._spot._last_update_time).total_seconds()
+                if self._spot and self._spot._last_update_time else -1,
+            )
+        return cl_ready and sp_ready and self._polymarket_ready
 
     @property
     def _network_healthy(self) -> bool:
@@ -113,7 +128,6 @@ class KalBot:
     async def _on_chainlink_price(self, update: PriceUpdate) -> None:
         self._cl_price = update.price
         self._cl_ts = update.timestamp
-        self._chainlink_ready = True
         if self._lifecycle.current_market_id and not self._lifecycle.is_trading_blocked():
             self._tracker.update(update.price, update.timestamp)
         if self._tick_logger and self._lifecycle.current_market_id:
@@ -125,7 +139,6 @@ class KalBot:
     async def _on_spot_price(self, update: PriceUpdate) -> None:
         self._spot_price = update.price
         self._spot_source = update.source
-        self._spot_ready = True
         if self._tick_logger and self._lifecycle.current_market_id:
             self._tick_logger.record(f"{self._lifecycle.current_market_id}_ticks",
                                      update.source, update.price, update.timestamp)
