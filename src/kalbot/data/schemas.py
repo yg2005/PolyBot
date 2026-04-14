@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS windows (
     ask_depth_usd REAL,
     depth_imbalance REAL,
     market_move_speed REAL,
+    momentum_slope_1min REAL,
     elapsed_seconds INTEGER,
     remaining_seconds INTEGER,
     snapshot_time TEXT,

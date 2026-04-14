@@ -34,6 +34,8 @@ FEATURE_COLS: list[str] = [
     "remaining_seconds",
     "time_of_day_hour",
     "day_of_week",
+    # Momentum
+    "momentum_slope_1min",
     # Derived
     "displacement_per_cross",
     "momentum_score",

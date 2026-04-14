@@ -92,4 +92,5 @@ def build_snapshot(
         elapsed_seconds=int(features.elapsed_seconds),
         remaining_seconds=remaining,
         snapshot_time=now,
+        momentum_slope_1min=features.momentum_slope_1min,
     )

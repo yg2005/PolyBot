@@ -68,6 +68,7 @@ class WindowSnapshot:
     elapsed_seconds: int
     remaining_seconds: int
     snapshot_time: datetime
+    momentum_slope_1min: float = 0.0
 
     settlement_outcome: str | None = None
     settlement_price: float | None = None

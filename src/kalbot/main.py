@@ -151,6 +151,12 @@ class KalBot:
     async def _polymarket_monitor(self) -> None:
         assert self._poly is not None
         while not self._shutdown.is_set():
+            # Settle BEFORE discovering next market to avoid _current_market being
+            # overwritten before settlement fires (~17% missing settlement_outcome).
+            if self._lifecycle.check_expiry() and self._current_market:
+                await self._settle_window(self._current_market)
+                self._current_market = None
+
             markets = self._poly.active_markets
             if markets:
                 if not self._polymarket_ready:
@@ -188,9 +194,6 @@ class KalBot:
                         )
                         await self._metrics.increment_session_windows()
 
-            if self._lifecycle.check_expiry() and self._current_market:
-                await self._settle_window(self._current_market)
-                self._current_market = None
             await asyncio.sleep(5)
 
     # ------------------------------------------------------------------ #
@@ -223,6 +226,12 @@ class KalBot:
         assert self._order_mgr and self._adaptive
         if not market:
             return
+
+        # Refresh orderbook at each mid/late bucket so spread/depth stay current.
+        if bucket >= 120 and self._poly:
+            ob = await self._poly.fetch_orderbook(market)
+            if ob:
+                self._last_ob = ob
 
         snap = build_snapshot(market, bucket, self._tracker, self._cl_price,
                               self._spot, self._spot_price, self._spot_source, self._last_ob)

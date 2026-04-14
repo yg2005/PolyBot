@@ -17,7 +17,8 @@ _FEATURE_COLS = [
     "direction_consistency", "cross_count", "time_above_pct", "time_below_pct",
     "max_displacement_pct", "min_displacement_pct", "velocity", "acceleration",
     "distance_from_low", "spot_displacement_pct", "spot_trend_1m",
-    "spot_confirms", "depth_imbalance", "market_move_speed", "elapsed_seconds",
+    "spot_confirms", "depth_imbalance", "market_move_speed",
+    "momentum_slope_1min", "elapsed_seconds",
 ]
 
 
@@ -69,6 +70,7 @@ class Database:
             snapshot.ask_depth_usd,
             snapshot.depth_imbalance,
             snapshot.market_move_speed,
+            snapshot.momentum_slope_1min,
             snapshot.elapsed_seconds,
             snapshot.remaining_seconds,
             snapshot.snapshot_time.isoformat(),
@@ -97,7 +99,7 @@ class Database:
                 spot_confirms, spot_source,
                 yes_bid, yes_ask, no_bid, no_ask,
                 spread, mid_price, bid_depth_usd, ask_depth_usd,
-                depth_imbalance, market_move_speed,
+                depth_imbalance, market_move_speed, momentum_slope_1min,
                 elapsed_seconds, remaining_seconds, snapshot_time,
                 settlement_outcome, settlement_price,
                 traded, trade_side,
@@ -106,7 +108,7 @@ class Database:
             ) VALUES (
                 ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
                 ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-                ?,?,?,?,?,?,?,?
+                ?,?,?,?,?,?,?,?,?
             )
         """
         async with aiosqlite.connect(self._path) as db:
@@ -294,3 +296,5 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         existing = {row[1] for row in await cur.fetchall()}
     if "is_primary" not in existing:
         await db.execute("ALTER TABLE windows ADD COLUMN is_primary INTEGER DEFAULT 0")
+    if "momentum_slope_1min" not in existing:
+        await db.execute("ALTER TABLE windows ADD COLUMN momentum_slope_1min REAL")
