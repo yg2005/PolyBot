@@ -281,6 +281,16 @@ class Database:
         df.to_csv(out, index=False)
         return len(df)
 
+    async def get_active_model_row(self) -> dict[str, Any] | None:
+        """Returns the is_active=1 row from model_registry, or None if absent."""
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM model_registry WHERE is_active=1 LIMIT 1"
+            ) as cur:
+                row = await cur.fetchone()
+        return dict(row) if row else None
+
     async def get_recent_windows(self, n: int = 100) -> list[dict[str, Any]]:
         sql = "SELECT * FROM windows ORDER BY created_at DESC LIMIT ?"
         async with aiosqlite.connect(self._path) as db:

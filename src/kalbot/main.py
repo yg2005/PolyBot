@@ -12,6 +12,7 @@ from .config import load_config
 from .data.db import Database
 from .data.logger import DailyStatsAggregator, TickLogger, WindowLogger
 from .engine.decision import DecisionEngine
+from .engine.ml_scorer import MLScorer
 from .engine.scorer import RuleScorer
 from .engine.snapshot_builder import build_snapshot, parse_strike
 from .engine.window_tracker import WindowLifecycleManager, WindowTracker
@@ -60,7 +61,7 @@ class KalBot:
 
         self._tracker = WindowTracker()
         self._lifecycle = WindowLifecycleManager(self._tracker)
-        self._scorer: RuleScorer | None = None
+        self._scorer: RuleScorer | MLScorer | None = None
         self._decision: DecisionEngine | None = None
         self._risk: RiskManager | None = None
         self._order_mgr: OrderManager | None = None
@@ -465,7 +466,17 @@ class KalBot:
         self._poly = PolymarketClient(gamma_url=fc.gamma_api_url, clob_url=fc.clob_api_url,
             discovery_interval_s=fc.market_discovery_interval_s, series_ticker=fc.market_series_ticker)
 
-        self._scorer = RuleScorer(self._tracker, fc.market_series_ticker, fc.chainlink_stale_threshold_s)
+        if self._cfg.engine.scorer == "ml":
+            model_row = await self._db.get_active_model_row()
+            if model_row is None:
+                raise RuntimeError(
+                    "engine.scorer=ml but no active model in model_registry — run: python -m kalbot.ml.train"
+                )
+            self._scorer = MLScorer.from_registry_row(model_row)
+            log.info("Scorer: MLScorer (model_id=%s)", model_row["model_id"])
+        else:
+            self._scorer = RuleScorer(self._tracker, fc.market_series_ticker, fc.chainlink_stale_threshold_s)
+            log.info("Scorer: RuleScorer")
         self._risk = RiskManager(self._cfg)
         self._decision = DecisionEngine(self._cfg, self._risk)
         self._order_mgr = OrderManager(self._cfg, self._db)

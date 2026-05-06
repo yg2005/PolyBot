@@ -1,1 +1,4 @@
 # Paper trading overrides — empty means use default.toml values
+
+[engine]
+scorer = "ml"

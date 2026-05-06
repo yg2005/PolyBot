@@ -20,7 +20,7 @@ CONF_SCALE = 0.90     # cap confidence slightly below 1.0
 
 
 def _snapshot_to_features(snap: WindowSnapshot) -> np.ndarray:
-    """Extract the 25 FEATURE_COLS from a live WindowSnapshot."""
+    """Extract the 26 FEATURE_COLS from a live WindowSnapshot."""
     ts = snap.snapshot_time
     hour = ts.hour + ts.minute / 60.0
     dow = ts.weekday()
@@ -54,6 +54,7 @@ def _snapshot_to_features(snap: WindowSnapshot) -> np.ndarray:
         float(snap.remaining_seconds),
         hour,
         float(dow),
+        snap.momentum_slope_1min,
         displacement_per_cross,
         momentum_score,
         market_disagreement,
