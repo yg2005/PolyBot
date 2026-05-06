@@ -223,7 +223,7 @@ class Database:
         max_date: str | None = None,
     ) -> pd.DataFrame:
         """Returns a DataFrame of windows for ML training."""
-        clauses: list[str] = []
+        clauses: list[str] = ["is_primary = 1", "momentum_slope_1min IS NOT NULL"]
         params: list[Any] = []
         if only_settled:
             clauses.append("settlement_outcome IS NOT NULL")
@@ -234,7 +234,7 @@ class Database:
             clauses.append("snapshot_time <= ?")
             params.append(max_date + "T23:59:59")
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-        sql = f"SELECT * FROM windows {where} ORDER BY snapshot_time DESC LIMIT ?"
+        sql = f"SELECT * FROM windows {where} ORDER BY snapshot_time ASC LIMIT ?"
         params.append(limit)
         async with aiosqlite.connect(self._path) as db:
             db.row_factory = aiosqlite.Row

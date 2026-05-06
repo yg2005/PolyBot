@@ -18,7 +18,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 
 from kalbot.ml.calibrate import expected_calibration_error, load_calibrator
 from kalbot.ml.features import get_feature_matrix
-from kalbot.ml.train import temporal_split
+from kalbot.ml.train import temporal_split_3way
 
 log = logging.getLogger(__name__)
 
@@ -64,11 +64,13 @@ async def evaluate(
         log.error("Insufficient data for evaluation")
         return {}
 
-    X, y, feature_names = build_feature_matrix(df)
-    _, X_val, _, y_val = temporal_split(X, y)
+    # Pre-filter so df_clean row count matches X/y from build_feature_matrix exactly.
+    df_clean = df[df["settlement_outcome"].notna()].reset_index(drop=True)
+    X, y, feature_names = build_feature_matrix(df_clean)
+    _, _, X_val, _, _, y_val = temporal_split_3way(X, y)
 
     n_val = len(y_val)
-    df_val = df.iloc[-n_val:].reset_index(drop=True)
+    df_val = df_clean.iloc[-n_val:].reset_index(drop=True)
     mid_prices = df_val["mid_price"].fillna(0.5).to_numpy(dtype=float)
 
     raw_proba = model.predict_proba(X_val)[:, 1]
@@ -100,7 +102,7 @@ async def evaluate(
     mean_edge = float(best_edge.mean())
     pos_edge_pct = float((best_edge > 0.02).mean() * 100)
 
-    # Profitability simulation (simplified — see backtest.py for full sim)
+    # Win-rate-only simulation (no dollar P&L — see backtest.py for full fee-aware sim)
     threshold = 0.55
     trade_mask = (cal_proba > threshold) | (cal_proba < (1 - threshold))
     n_trades = int(trade_mask.sum())

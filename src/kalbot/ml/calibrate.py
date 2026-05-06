@@ -80,12 +80,15 @@ def fit_calibrator(
         method = "platt"
 
     cal.fit(y_prob, y_true)
+    # In-sample ECE only — isotonic regression overfits training data so this
+    # will be optimistically low. Real ECE is measured on the held-out test set
+    # in train.py after calling cal.transform on test predictions.
     y_cal = cal.transform(y_prob)
     ece = expected_calibration_error(y_true, y_cal)
 
-    log.info("Calibration (%s): ECE=%.4f (threshold %.2f)", method, ece, ECE_THRESHOLD)
+    log.info("Calibration (%s) in-sample ECE=%.4f (informational only)", method, ece)
     if ece >= ECE_THRESHOLD:
-        log.warning("ECE=%.4f exceeds threshold %.2f — model may be miscalibrated", ece, ECE_THRESHOLD)
+        log.warning("Even in-sample ECE=%.4f >= %.2f — severe miscalibration", ece, ECE_THRESHOLD)
 
     return cal
 

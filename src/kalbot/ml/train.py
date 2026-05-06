@@ -31,23 +31,34 @@ XGB_PARAMS = {
     "colsample_bytree": 0.8,
     "min_child_weight": 5,
     "eval_metric": "auc",
-    "use_label_encoder": False,
     "random_state": 42,
 }
 
 MIN_AUC = 0.75
-TRAIN_FRAC = 0.75
+TRAIN_FRAC = 0.60
+CAL_FRAC = 0.15
+TEST_FRAC = 0.25
 MODELS_DIR = Path("models")
 
 
-def temporal_split(
+def temporal_split_3way(
     X: np.ndarray,
     y: np.ndarray,
     train_frac: float = TRAIN_FRAC,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Strictly temporal split — no shuffling."""
-    n_train = int(len(X) * train_frac)
-    return X[:n_train], X[n_train:], y[:n_train], y[n_train:]
+    cal_frac: float = CAL_FRAC,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Strictly temporal 3-way split — no shuffling.
+
+    Returns (X_train, X_cal, X_test, y_train, y_cal, y_test).
+    train=60%, cal=15%, test=25% by default.
+    """
+    n = len(X)
+    n_train = int(n * train_frac)
+    n_cal = int(n * cal_frac)
+    return (
+        X[:n_train], X[n_train:n_train + n_cal], X[n_train + n_cal:],
+        y[:n_train], y[n_train:n_train + n_cal], y[n_train + n_cal:],
+    )
 
 
 def walk_forward_auc(
@@ -125,37 +136,45 @@ async def train(
 
     log.info("Feature matrix: %d samples × %d features", *X.shape)
 
-    # Walk-forward validation
+    # Walk-forward validation on full dataset
     wf_auc = walk_forward_auc(X, y)
     log.info("Walk-forward mean AUC: %.4f", wf_auc)
 
-    # Final temporal split
-    X_train, X_val, y_train, y_val = temporal_split(X, y)
+    # 3-way temporal split: train 60%, calibration 15%, test 25%
+    X_train, X_cal, X_test, y_train, y_cal, y_test = temporal_split_3way(X, y)
+    log.info(
+        "Split sizes — train: %d, cal: %d, test: %d",
+        len(y_train), len(y_cal), len(y_test),
+    )
 
     model = xgb.XGBClassifier(**XGB_PARAMS)
     model.fit(
         X_train, y_train,
-        eval_set=[(X_val, y_val)],
+        eval_set=[(X_test, y_test)],
         verbose=False,
     )
 
-    val_proba = model.predict_proba(X_val)[:, 1]
-    if len(np.unique(y_val)) < 2:
-        log.error("Validation set has only one class — cannot compute AUC")
+    if len(np.unique(y_test)) < 2:
+        log.error("Test set has only one class — cannot compute AUC")
         return None
 
-    val_auc = roc_auc_score(y_val, val_proba)
-    log.info("Validation AUC: %.4f (threshold %.2f)", val_auc, MIN_AUC)
+    # Fit calibrator on cal set ONLY — never on test set
+    cal_raw = model.predict_proba(X_cal)[:, 1]
+    cal = fit_calibrator(cal_raw, y_cal)
 
-    if val_auc < MIN_AUC:
-        log.warning("AUC=%.4f < threshold=%.2f — model NOT saved", val_auc, MIN_AUC)
+    # Score AUC and ECE on test set ONLY
+    test_raw = model.predict_proba(X_test)[:, 1]
+    test_proba = cal.transform(test_raw)
+
+    test_auc = roc_auc_score(y_test, test_proba)
+    log.info("Test AUC (calibrated): %.4f (threshold %.2f)", test_auc, MIN_AUC)
+
+    if test_auc < MIN_AUC:
+        log.warning("AUC=%.4f < threshold=%.2f — model NOT saved", test_auc, MIN_AUC)
         return None
 
-    # Calibration
-    cal = fit_calibrator(val_proba, y_val)
-    cal_proba = cal.transform(val_proba)
-    ece = expected_calibration_error(y_val, cal_proba)
-    log.info("Post-calibration ECE: %.4f", ece)
+    ece = expected_calibration_error(y_test, test_proba)
+    log.info("Post-calibration ECE (test set): %.4f", ece)
 
     if ece >= 0.05:
         log.error("ECE=%.4f >= 0.05 — calibration failed, model NOT saved", ece)
@@ -181,7 +200,7 @@ async def train(
         db_path=db_path,
         model_id=model_id,
         training_samples=len(X_train),
-        auc_score=val_auc,
+        auc_score=test_auc,
         calibration_error=ece,
         feature_names=feature_names,
         feature_importance=top_importance,
