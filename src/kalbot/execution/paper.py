@@ -216,6 +216,9 @@ class PaperExecutor:
         """Compute P&L for the filled position in this window."""
         pos = self.get_fill(window_id)
         if pos is None:
+            # In-memory state lost (e.g. bot restart) — recover from DB
+            pos = await self._get_fill_from_db(window_id)
+        if pos is None:
             return None
         fill_price = pos["fill_price"]
         if fill_price is None:
@@ -226,6 +229,29 @@ class PaperExecutor:
             window_id, pos["side"], fill_price, outcome, pnl,
         )
         return pnl
+
+    async def _get_fill_from_db(self, window_id: str) -> dict | None:
+        """Query SQLite for a FILLED order for this window (fallback after restart)."""
+        try:
+            async with aiosqlite.connect(self._db._path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    "SELECT side, fill_price, size, order_id FROM orders"
+                    " WHERE window_id=? AND status='FILLED' ORDER BY filled_at DESC LIMIT 1",
+                    (window_id,),
+                ) as cur:
+                    row = await cur.fetchone()
+            if row is None:
+                return None
+            return {
+                "side": row["side"],
+                "fill_price": row["fill_price"],
+                "size_usd": row["size"],
+                "order_id": row["order_id"],
+            }
+        except Exception as exc:
+            log.error("PaperExecutor DB fill lookup failed for %s: %s", window_id, exc)
+            return None
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                     #

@@ -11,7 +11,7 @@ log = logging.getLogger(__name__)
 # Hard limits — cannot be overridden by config
 MAX_POSITION_USD_HARD: float = 50.0
 MAX_DAILY_LOSS_HARD: float = 30.0
-MAX_DRAWDOWN_HARD_PCT: float = 25.0
+MAX_DRAWDOWN_HARD_PCT: float = 50.0
 MAX_CONSECUTIVE_LOSSES: int = 10
 
 

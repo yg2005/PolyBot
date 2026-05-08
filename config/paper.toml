@@ -2,3 +2,6 @@
 
 [engine]
 scorer = "ml"
+
+[risk]
+max_drawdown_pct = 50.0
