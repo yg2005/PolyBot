@@ -258,6 +258,7 @@ class KalBot:
         if in_window and not_traded:
             score = await self._scorer.score(snap)
             snap.rule_signal = score.signal
+            snap.model_prob = score.confidence
             await self._metrics.update_window(
                 signal=score.signal,
                 model_prob=snap.model_prob,
