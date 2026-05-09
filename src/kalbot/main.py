@@ -370,6 +370,7 @@ class KalBot:
         await self._db.update_settlement_all(market.condition_id, outcome, price)
 
         pnl: float | None = None
+        risk_settled = False
         if fill_wid:
             pnl = await self._order_mgr.settle_positions(fill_wid, outcome)
             pos = self._order_mgr.get_fill(fill_wid)
@@ -380,6 +381,7 @@ class KalBot:
                     fill_wid, price, strike, outcome, pnl,
                 )
                 self._risk.register_settlement(pnl)
+                risk_settled = True
                 await self._metrics.close_position(fill_wid, pnl)
                 if self._alerts:
                     await self._alerts.settlement(outcome, pnl, market.question)
@@ -395,6 +397,17 @@ class KalBot:
                 "Settlement (untraded) | condition=%s price=%.2f strike=%.2f outcome=%s",
                 market.condition_id[:16], price, strike, outcome,
             )
+
+        # Guarantee every register_trade is matched by a register_settlement.
+        # Fires when: maker order never filled, fill_price was None, or no fill found.
+        if not risk_settled and market.condition_id in self._traded_windows:
+            self._risk.register_settlement(0.0)
+            log.warning(
+                "Settlement (no fill) | condition=%s — maker expired unfilled, open_positions=%d",
+                market.condition_id[:16], self._risk.state.open_positions,
+            )
+
+        log.info("open_positions after settlement: %d", self._risk.state.open_positions)
 
         disp = (price - strike) / strike * 100 if strike else 0.0
         cons = feats.direction_consistency if feats else 0.0
