@@ -8,7 +8,7 @@ import numpy as np
 import xgboost as xgb
 
 from kalbot.engine.scorer import BaseScorer
-from kalbot.ml.calibrate import IsotonicCalibrator, PlattCalibrator, load_calibrator
+from kalbot.ml.calibrate import PlattCalibrator, load_calibrator
 from kalbot.ml.features import FEATURE_COLS
 from kalbot.types import ScorerResult, WindowSnapshot
 
@@ -74,7 +74,7 @@ class MLScorer(BaseScorer):
     ) -> None:
         self._model = xgb.XGBClassifier()
         self._model.load_model(model_path)
-        self._cal: IsotonicCalibrator | PlattCalibrator = load_calibrator(calibrator_path)
+        self._cal: PlattCalibrator = load_calibrator(calibrator_path)
         self._min_edge = min_edge
         log.info("MLScorer loaded: model=%s cal=%s", model_path, calibrator_path)
 
@@ -108,6 +108,10 @@ class MLScorer(BaseScorer):
         X = feats.reshape(1, -1)
         raw_prob = float(self._model.predict_proba(X)[0, 1])
         cal_prob = float(self._cal.transform(np.array([raw_prob]))[0])
+
+        # Coin-flip zone: no real edge regardless of calibration method
+        if 0.50 <= cal_prob <= 0.55:
+            return _pass(f"coin_flip: cal_prob={cal_prob:.4f} in [0.50, 0.55]")
 
         mid = snapshot.mid_price
         if mid <= 0 or mid >= 1:

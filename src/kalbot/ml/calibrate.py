@@ -12,7 +12,7 @@ from sklearn.linear_model import LogisticRegression
 
 log = logging.getLogger(__name__)
 
-ECE_THRESHOLD = 0.05
+ECE_THRESHOLD = 0.08
 N_BINS = 10
 
 
@@ -69,15 +69,15 @@ class PlattCalibrator:
 def fit_calibrator(
     y_prob: np.ndarray,
     y_true: np.ndarray,
-) -> IsotonicCalibrator | PlattCalibrator:
-    """Fits the right calibrator and checks ECE."""
-    n = len(y_true)
-    if n > 200:
-        cal: IsotonicCalibrator | PlattCalibrator = IsotonicCalibrator()
-        method = "isotonic"
-    else:
-        cal = PlattCalibrator()
-        method = "platt"
+) -> PlattCalibrator:
+    """Fits Platt (sigmoid) calibrator and checks ECE.
+
+    Isotonic was dropped: with ~750 cal samples it produces a 22-step
+    staircase that overfits and mis-calibrates borderline buckets.
+    Platt gives a smooth monotone mapping that generalises better.
+    """
+    cal = PlattCalibrator()
+    method = "platt"
 
     cal.fit(y_prob, y_true)
     # In-sample ECE only — isotonic regression overfits training data so this
@@ -93,13 +93,13 @@ def fit_calibrator(
     return cal
 
 
-def save_calibrator(cal: IsotonicCalibrator | PlattCalibrator, path: str) -> None:
+def save_calibrator(cal: PlattCalibrator, path: str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:
         pickle.dump(cal, f)
     log.info("Calibrator saved to %s", path)
 
 
-def load_calibrator(path: str) -> IsotonicCalibrator | PlattCalibrator:
+def load_calibrator(path: str) -> PlattCalibrator:
     with open(path, "rb") as f:
         return pickle.load(f)

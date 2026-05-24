@@ -5,3 +5,4 @@ scorer = "ml"
 
 [risk]
 max_drawdown_pct = 50.0
+min_edge_pct = 5.0
