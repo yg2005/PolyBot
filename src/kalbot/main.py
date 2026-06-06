@@ -8,6 +8,8 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
+
 from .config import load_config
 from .data.db import Database
 from .data.logger import DailyStatsAggregator, TickLogger, WindowLogger
@@ -47,6 +49,30 @@ def _setup_logging() -> None:
 
 
 log = logging.getLogger(__name__)
+
+# Countries where Polymarket is blocked. Source: Polymarket ToS.
+_BLOCKED_COUNTRY_CODES = frozenset({
+    "US", "GB", "CA", "AU", "NZ",  # common geo-restricted markets
+})
+
+
+async def _check_vpn() -> None:
+    """Refuse live startup if the public IP resolves to a blocked country."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            ip_resp = await client.get("https://api.ipify.org?format=json")
+            ip = ip_resp.json()["ip"]
+            geo_resp = await client.get(f"https://ipapi.co/{ip}/country/")
+            country = geo_resp.text.strip().upper()
+    except Exception as exc:
+        raise RuntimeError(f"VPN check failed — could not determine public IP: {exc}") from exc
+
+    log.info("VPN check: public IP=%s country=%s", ip, country)
+    if country in _BLOCKED_COUNTRY_CODES:
+        raise RuntimeError(
+            f"Live mode blocked: detected country={country}. "
+            "Connect to VPN before starting in live mode."
+        )
 
 
 class KalBot:
@@ -465,6 +491,8 @@ class KalBot:
 
     async def start(self) -> None:
         log.info("KalBot starting in %s mode", self._cfg.execution.mode)
+        if self._cfg.execution.mode == "live":
+            await _check_vpn()
         await self._db.init()
 
         fc = self._cfg.feeds
