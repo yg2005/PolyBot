@@ -22,16 +22,14 @@ class OrderManager:
     """Routes orders to paper executor (default) or live Polymarket CLOB.
 
     Paper mode: all state lives in PaperExecutor (in-memory + SQLite).
-    Live mode: uses py-clob-client for order placement and cancellation.
+    Live mode: uses polymarket-client for order placement and cancellation.
     """
 
     def __init__(self, cfg: KalbotConfig, db: Database) -> None:
-        self._mode          = cfg.execution.mode
-        self._paper         = PaperExecutor(cfg.execution, db)
-        self._private_key   = cfg.polymarket_private_key
-        self._proxy_wallet  = cfg.polymarket_proxy_wallet
-        self._nonce         = 0
-        self._live_redirects:  dict[str, str]                 = {}
+        self._mode        = cfg.execution.mode
+        self._paper       = PaperExecutor(cfg.execution, db)
+        self._private_key = cfg.polymarket_private_key
+        self._live_redirects:  dict[str, str]                    = {}
         self._live_order_meta: dict[str, tuple[str, str, float]] = {}
         self._kill_switch: KillSwitch | None = None
         self._ramp:        SizeRamp | None   = None
@@ -105,30 +103,17 @@ class OrderManager:
     # ------------------------------------------------------------------ #
 
     def _get_clob_client(self):
-        """Return a cached ClobClient with Level 2 auth (lazy init)."""
+        """Return a cached SecureClient (lazy init)."""
         if self._clob_client is not None:
             return self._clob_client
 
-        from py_clob_client.client import ClobClient
-        from py_order_utils.model import POLY_PROXY
+        from polymarket import SecureClient
 
-        if not self._private_key or not self._proxy_wallet:
-            raise RuntimeError(
-                "Live mode requires POLYMARKET_PRIVATE_KEY and POLYMARKET_PROXY_WALLET"
-            )
+        if not self._private_key:
+            raise RuntimeError("Live mode requires POLYMARKET_PRIVATE_KEY")
 
-        client = ClobClient(
-            host="https://clob.polymarket.com",
-            key=self._private_key,
-            chain_id=137,
-            signature_type=POLY_PROXY,
-            funder=self._proxy_wallet,
-        )
-        creds = client.derive_api_key()
-        if creds is None:
-            raise RuntimeError("Failed to derive Polymarket API credentials")
-        client.set_api_creds(creds)
-        log.info("ClobClient ready: address=%s  api_key=%s...", client.get_address(), creds.api_key[:8])
+        client = SecureClient.create(private_key=self._private_key)
+        log.info("SecureClient ready: wallet=%s", client.wallet)
         self._clob_client = client
         return client
 
@@ -158,24 +143,21 @@ class OrderManager:
                 size_usd, self._risk.daily_pnl, self._max_daily_loss_usd
             )
 
-        from py_clob_client.clob_types import OrderArgs
+        from polymarket import AcceptedOrder
 
         # window_id is the CTF token_id in live mode
-        # size in OrderArgs is ConditionalTokens (shares), not USDC
+        # size is ConditionalTokens (shares), not USDC
         shares = size_usd / price
-        order_args = OrderArgs(
-            token_id=window_id,
-            price=price,
-            size=shares,
-            side=side,
-        )
-        self._nonce += 1
-        order_args.nonce = self._nonce
-
         clob = self._get_clob_client()
 
         try:
-            data = await asyncio.to_thread(clob.create_and_post_order, order_args)
+            resp = await asyncio.to_thread(
+                clob.place_limit_order,
+                token_id=window_id,
+                price=price,
+                size=shares,
+                side=side,
+            )
         except Exception as exc:
             log.error("CLOB place_order failed: %s", exc)
             if self._kill_switch is not None:
@@ -186,17 +168,19 @@ class OrderManager:
             self._kill_switch.record_internet_ok()
             self._kill_switch.record_api_response(200)
 
-        order_id = (data or {}).get("orderID", "") or (data or {}).get("id", "")
-        status   = (data or {}).get("status", "unknown")
-        fill_price: float | None = None
-        if status in ("matched", "filled"):
-            fill_price = float((data or {}).get("price", price))
+        if not isinstance(resp, AcceptedOrder):
+            log.error("Order rejected: code=%s  msg=%s", resp.code, resp.message)
+            raise RuntimeError(f"Order rejected by CLOB: {resp.code} — {resp.message}")
 
-        if order_id:
-            self._live_order_meta[order_id] = (window_id, side, size_usd)
+        order_id   = resp.order_id
+        fill_price: float | None = None
+        if resp.status == "matched":
+            fill_price = price
+
+        self._live_order_meta[order_id] = (window_id, side, size_usd)
         log.info(
             "LiveOrder %s | %s %s @ %.4f size=%.2f status=%s",
-            order_id, side, strategy, price, size_usd, status,
+            order_id, side, strategy, price, size_usd, resp.status,
         )
         return order_id, fill_price
 
@@ -223,12 +207,16 @@ class OrderManager:
     async def _live_cancel(self, order_id: str) -> bool:
         clob = self._get_clob_client()
         try:
-            await asyncio.to_thread(clob.cancel, order_id)
+            resp = await asyncio.to_thread(clob.cancel_order, order_id=order_id)
         except Exception as exc:
             log.error("LiveCancel %s failed: %s", order_id, exc)
             if self._kill_switch is not None:
                 self._kill_switch.record_api_response(500)
             return False
+
+        if order_id not in resp.canceled:
+            reason = resp.not_canceled.get(order_id, "unknown")
+            log.warning("LiveCancel %s not confirmed: %s", order_id, reason)
 
         if self._kill_switch is not None:
             self._kill_switch.record_internet_ok()
