@@ -114,6 +114,7 @@ class KalbotConfig(BaseModel):
     polymarket_api_secret: str = Field(default="", repr=False)      # base64url HMAC secret (derived or from POLYMARKET_SECRET)
     polymarket_api_passphrase: str = Field(default="", repr=False)  # derived or from POLYMARKET_PASSPHRASE
     polymarket_wallet_address: str = Field(default="", repr=False)  # derived or from POLYMARKET_WALLET_ADDRESS
+    polymarket_proxy_wallet: str = Field(default="", repr=False)   # deposit/proxy wallet — from POLYMARKET_PROXY_WALLET
     discord_webhook_url: str = Field(default="", repr=False)
     telegram_bot_token: str = Field(default="", repr=False)
     telegram_chat_id: str = Field(default="", repr=False)
@@ -136,6 +137,7 @@ def load_config() -> KalbotConfig:
     cfg.polymarket_api_secret     = os.getenv("POLYMARKET_SECRET", "")
     cfg.polymarket_api_passphrase = os.getenv("POLYMARKET_PASSPHRASE", "")
     cfg.polymarket_wallet_address = os.getenv("POLYMARKET_WALLET_ADDRESS", "")
+    cfg.polymarket_proxy_wallet   = os.getenv("POLYMARKET_PROXY_WALLET", "")
     cfg.discord_webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "")
     cfg.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     cfg.telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID", "")

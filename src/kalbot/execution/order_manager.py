@@ -7,7 +7,7 @@ import httpx
 
 from ..config import KalbotConfig
 from ..data.db import Database
-from .clob_auth import build_clob_headers
+from .clob_auth import build_clob_headers, build_signed_order
 from .paper import PaperExecutor
 
 if TYPE_CHECKING:
@@ -36,6 +36,8 @@ class OrderManager:
         self._api_secret = cfg.polymarket_api_secret
         self._api_passphrase = cfg.polymarket_api_passphrase
         self._wallet_address = cfg.polymarket_wallet_address
+        self._proxy_wallet = cfg.polymarket_proxy_wallet
+        self._private_key = cfg.polymarket_private_key
         self._nonce = 0
         # Live mode: old_order_id → new_order_id after cancel+replace amend
         self._live_redirects: dict[str, str] = {}
@@ -157,6 +159,10 @@ class OrderManager:
             raise RuntimeError(
                 "Live mode requires POLYMARKET_API_KEY and POLYMARKET_SECRET env vars."
             )
+        if not self._private_key or not self._proxy_wallet:
+            raise RuntimeError(
+                "Live mode requires POLYMARKET_PRIVATE_KEY and POLYMARKET_PROXY_WALLET env vars."
+            )
 
         # Apply size ramp for live orders
         if self._ramp is not None and self._risk is not None:
@@ -168,14 +174,21 @@ class OrderManager:
 
         order_type = "GTC" if strategy in ("maker", "adaptive") else "FOK"
         self._nonce += 1
+        signed_order = build_signed_order(
+            private_key=self._private_key,
+            proxy_wallet=self._proxy_wallet,
+            token_id=window_id,  # callers must pass token_id as window_id for live
+            side=side,
+            price=price,
+            size_usdc=size_usd,
+            fee_rate_bps=0,
+            nonce=self._nonce,
+        )
         payload = {
+            "order":     signed_order,
+            "owner":     self._api_key,
             "orderType": order_type,
-            "tokenID": window_id,  # callers must pass token_id as window_id for live
-            "side": side,
-            "price": str(round(price, 4)),
-            "size": str(round(size_usd, 2)),
-            "nonce": self._nonce,
-            "feeRateBps": "50",
+            "postOnly":  False,
         }
         try:
             import json as _json

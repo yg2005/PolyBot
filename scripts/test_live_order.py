@@ -9,10 +9,12 @@ Usage:
 Auth flow:
   1. Load POLYMARKET_PRIVATE_KEY (Ethereum hex key) from .env
   2. EIP-712 sign → GET /auth/derive-api-key → (api_key, secret, passphrase)
-  3. HMAC-SHA256 sign the order POST and cancel DELETE with those credentials
+  3. Build EIP-712 signed Order struct (POLY_PROXY, maker=proxy wallet)
+  4. HMAC-SHA256 sign the order POST and cancel DELETE
 
 Required .env:
-    POLYMARKET_PRIVATE_KEY   — 0x-prefixed hex Ethereum private key
+    POLYMARKET_PRIVATE_KEY    — 0x-prefixed hex Ethereum private key
+    POLYMARKET_PROXY_WALLET   — proxy/deposit wallet address (from Polymarket UI)
 """
 from __future__ import annotations
 
@@ -34,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import httpx
 from dotenv import load_dotenv
 from eth_account import Account
+from kalbot.execution.clob_auth import build_signed_order
 
 load_dotenv()
 
@@ -45,7 +48,7 @@ GAMMA_URL      = "https://gamma-api.polymarket.com"
 SERIES_TICKER  = "btc-up-or-down-5m"
 CHAIN_ID       = 137
 
-TEST_PRICE = 0.01   # intentionally unfillable
+TEST_PRICE = 0.01   # intentionally unfillable — sits deep in the book
 TEST_SIZE  = 1.0    # $1 notional
 
 _CLOB_AUTH_MSG = "This message attests that I control the given wallet"
@@ -213,14 +216,30 @@ async def _find_market(client: httpx.AsyncClient) -> dict:
 # Order placement / cancellation                                      #
 # ------------------------------------------------------------------ #
 
-async def _place_order(client: httpx.AsyncClient, creds: dict, token_id: str) -> str:
+async def _place_order(
+    client: httpx.AsyncClient,
+    creds: dict,
+    token_id: str,
+    private_key: str,
+    proxy_wallet: str,
+) -> str:
+    signed_order = build_signed_order(
+        private_key=private_key,
+        proxy_wallet=proxy_wallet,
+        token_id=token_id,
+        side="BUY",
+        price=TEST_PRICE,
+        size_usdc=TEST_SIZE,
+        fee_rate_bps=0,
+    )
+    if DEBUG:
+        print(f"\n[DEBUG] signed_order={json.dumps(signed_order, indent=2)}")
+
     payload = {
+        "order":     signed_order,
+        "owner":     creds["api_key"],
         "orderType": "GTC",
-        "tokenID":   token_id,
-        "side":      "BUY",
-        "price":     str(TEST_PRICE),
-        "size":      str(TEST_SIZE),
-        "feeRateBps":"0",
+        "postOnly":  False,
     }
     body = json.dumps(payload)
     resp = await client.post(
@@ -256,9 +275,15 @@ async def _cancel_order(client: httpx.AsyncClient, creds: dict, order_id: str) -
 # ------------------------------------------------------------------ #
 
 async def run() -> None:
-    private_key = os.getenv("POLYMARKET_PRIVATE_KEY", "")
+    private_key  = os.getenv("POLYMARKET_PRIVATE_KEY", "")
+    proxy_wallet = os.getenv("POLYMARKET_PROXY_WALLET", "")
     if not private_key:
         raise RuntimeError("POLYMARKET_PRIVATE_KEY not set in .env")
+    if not proxy_wallet:
+        raise RuntimeError(
+            "POLYMARKET_PROXY_WALLET not set in .env. "
+            "Complete the Polymarket deposit flow and copy your proxy wallet address."
+        )
 
     async with httpx.AsyncClient() as client:
         creds  = await _derive_creds(client, private_key)
@@ -268,7 +293,9 @@ async def run() -> None:
             market["yes_token_id"], TEST_PRICE, TEST_SIZE,
         )
         t0       = time.monotonic()
-        order_id = await _place_order(client, creds, market["yes_token_id"])
+        order_id = await _place_order(
+            client, creds, market["yes_token_id"], private_key, proxy_wallet
+        )
         log.info("Waiting 5 seconds before cancelling...")
         await asyncio.sleep(5)
         await _cancel_order(client, creds, order_id)
