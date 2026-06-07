@@ -110,9 +110,10 @@ class KalbotConfig(BaseModel):
 
     # Secrets — loaded from env, never from TOML
     polymarket_api_key: str = Field(default="", repr=False)
-    polymarket_api_secret: str = Field(default="", repr=False)      # base64url HMAC secret (POLYMARKET_SECRET or fallback POLYMARKET_PRIVATE_KEY)
-    polymarket_api_passphrase: str = Field(default="", repr=False)  # optional — empty string if not issued
-    polymarket_wallet_address: str = Field(default="", repr=False)  # optional — 0x address for POLY_ADDRESS header
+    polymarket_private_key: str = Field(default="", repr=False)      # hex Ethereum key — used to derive api_secret/passphrase/wallet
+    polymarket_api_secret: str = Field(default="", repr=False)      # base64url HMAC secret (derived or from POLYMARKET_SECRET)
+    polymarket_api_passphrase: str = Field(default="", repr=False)  # derived or from POLYMARKET_PASSPHRASE
+    polymarket_wallet_address: str = Field(default="", repr=False)  # derived or from POLYMARKET_WALLET_ADDRESS
     discord_webhook_url: str = Field(default="", repr=False)
     telegram_bot_token: str = Field(default="", repr=False)
     telegram_chat_id: str = Field(default="", repr=False)
@@ -130,12 +131,9 @@ def load_config() -> KalbotConfig:
     cfg = KalbotConfig(**merged)
 
     # Inject secrets from environment
-    cfg.polymarket_api_key = os.getenv("POLYMARKET_API_KEY", "")
-    # POLYMARKET_SECRET is canonical; fall back to POLYMARKET_PRIVATE_KEY (old name)
-    cfg.polymarket_api_secret = (
-        os.getenv("POLYMARKET_SECRET")
-        or os.getenv("POLYMARKET_PRIVATE_KEY", "")
-    )
+    cfg.polymarket_private_key    = os.getenv("POLYMARKET_PRIVATE_KEY", "")
+    cfg.polymarket_api_key        = os.getenv("POLYMARKET_API_KEY", "")
+    cfg.polymarket_api_secret     = os.getenv("POLYMARKET_SECRET", "")
     cfg.polymarket_api_passphrase = os.getenv("POLYMARKET_PASSPHRASE", "")
     cfg.polymarket_wallet_address = os.getenv("POLYMARKET_WALLET_ADDRESS", "")
     cfg.discord_webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "")

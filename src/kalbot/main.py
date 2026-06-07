@@ -19,6 +19,7 @@ from .engine.scorer import RuleScorer
 from .engine.snapshot_builder import build_snapshot, parse_strike
 from .engine.window_tracker import WindowLifecycleManager, WindowTracker
 from .execution.adaptive import AdaptiveExecutor
+from .execution.clob_auth import derive_api_creds, wallet_address_from_key
 from .execution.order_manager import OrderManager
 from .execution.ramp import SizeRamp
 from .feeds.base import PriceUpdate
@@ -73,6 +74,25 @@ async def _check_vpn() -> None:
             f"Live mode blocked: detected country={country}. "
             "Connect to VPN before starting in live mode."
         )
+
+
+async def _ensure_live_creds(cfg: Any) -> None:
+    """Derive CLOB L2 credentials from private key at live startup if not pre-set."""
+    pk = cfg.polymarket_private_key
+    if not pk:
+        raise RuntimeError("Live mode requires POLYMARKET_PRIVATE_KEY in .env")
+    if not cfg.polymarket_wallet_address:
+        cfg.polymarket_wallet_address = wallet_address_from_key(pk)
+        log.info("Wallet address: %s", cfg.polymarket_wallet_address)
+    if not cfg.polymarket_api_secret or not cfg.polymarket_api_passphrase:
+        log.info("Deriving CLOB credentials from private key ...")
+        key, secret, passphrase = await derive_api_creds(
+            pk, clob_url=cfg.feeds.clob_api_url
+        )
+        cfg.polymarket_api_key        = key
+        cfg.polymarket_api_secret     = secret
+        cfg.polymarket_api_passphrase = passphrase
+        log.info("Credentials derived: api_key=%s...", key[:8])
 
 
 class KalBot:
@@ -493,6 +513,7 @@ class KalBot:
         log.info("KalBot starting in %s mode", self._cfg.execution.mode)
         if self._cfg.execution.mode == "live":
             await _check_vpn()
+            await _ensure_live_creds(self._cfg)
         await self._db.init()
 
         fc = self._cfg.feeds
