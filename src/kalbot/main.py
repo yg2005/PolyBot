@@ -19,6 +19,7 @@ from .engine.scorer import RuleScorer
 from .engine.snapshot_builder import build_snapshot, parse_strike
 from .engine.window_tracker import WindowLifecycleManager, WindowTracker
 from .execution.adaptive import AdaptiveExecutor
+from .execution.clob_auth import derive_api_creds, wallet_address_from_key
 from .execution.order_manager import OrderManager
 from .execution.ramp import SizeRamp
 from .feeds.base import PriceUpdate
@@ -73,6 +74,38 @@ async def _check_vpn() -> None:
             f"Live mode blocked: detected country={country}. "
             "Connect to VPN before starting in live mode."
         )
+
+
+async def _ensure_live_creds(cfg: "KalbotConfig") -> None:  # type: ignore[name-defined]
+    """Derive L2 API creds from private key if not already in config.
+
+    Polymarket API key/secret/passphrase are server-generated. If the user only
+    has their private key, we recover them via GET /auth/derive-api-key (L1 EIP-712).
+    The derived values are injected into cfg for this session.
+    """
+    from .config import KalbotConfig  # local import avoids circular at module level
+
+    if not cfg.polymarket_private_key:
+        raise RuntimeError(
+            "Live mode requires POLYMARKET_PRIVATE_KEY in .env"
+        )
+
+    # Derive wallet address from private key if not set
+    if not cfg.polymarket_wallet_address:
+        cfg.polymarket_wallet_address = wallet_address_from_key(cfg.polymarket_private_key)
+        log.info("Derived wallet address: %s", cfg.polymarket_wallet_address)
+
+    # Derive L2 credentials if not set
+    if not cfg.polymarket_api_secret or not cfg.polymarket_api_passphrase:
+        log.info("Deriving L2 API credentials from private key via /auth/derive-api-key ...")
+        api_key, secret, passphrase = await derive_api_creds(
+            cfg.polymarket_private_key,
+            clob_url=cfg.feeds.clob_api_url,
+        )
+        cfg.polymarket_api_key = api_key
+        cfg.polymarket_api_secret = secret
+        cfg.polymarket_api_passphrase = passphrase
+        log.info("L2 credentials derived: api_key=%s", api_key[:8] + "...")
 
 
 class KalBot:
@@ -493,6 +526,7 @@ class KalBot:
         log.info("KalBot starting in %s mode", self._cfg.execution.mode)
         if self._cfg.execution.mode == "live":
             await _check_vpn()
+            await _ensure_live_creds(self._cfg)
         await self._db.init()
 
         fc = self._cfg.feeds

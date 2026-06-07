@@ -112,8 +112,8 @@ class KalbotConfig(BaseModel):
     polymarket_api_key: str = Field(default="", repr=False)
     polymarket_api_secret: str = Field(default="", repr=False)      # base64url — HMAC signing
     polymarket_api_passphrase: str = Field(default="", repr=False)
-    polymarket_wallet_address: str = Field(default="", repr=False)  # 0x... Ethereum address
-    polymarket_private_key: str = Field(default="", repr=False)     # L1 EIP-712 auth (future)
+    polymarket_wallet_address: str = Field(default="", repr=False)  # derived from private_key if blank
+    polymarket_private_key: str = Field(default="", repr=False)     # L1 EIP-712 auth + wallet address derivation
     discord_webhook_url: str = Field(default="", repr=False)
     telegram_bot_token: str = Field(default="", repr=False)
     telegram_chat_id: str = Field(default="", repr=False)
