@@ -27,13 +27,19 @@ POLY_API_KEY = "POLY_API_KEY"
 POLY_PASSPHRASE = "POLY_PASSPHRASE"
 
 
+def _pad_base64(value: str) -> str:
+    """Add missing base64 padding (matches py-sdk _pad_base64)."""
+    return value + "=" * ((-len(value)) % 4)
+
+
 def _hmac_sig(secret: str, timestamp: int, method: str, path: str, body: str) -> str:
-    """Matches py-clob-client build_hmac_signature byte-for-byte."""
-    key = base64.urlsafe_b64decode(secret)
-    # Single-quote → double-quote: required for Go/TS/Py hash parity
-    message = str(timestamp) + method + path + body.replace("'", '"')
+    """Matches py-sdk/py_sdk/signing/hmac.py build_hmac_signature exactly."""
+    key = base64.urlsafe_b64decode(_pad_base64(secret))
+    message = str(timestamp) + method + path
+    if body:
+        message += body                    # no quote replacement — matches new SDK
     digest = hmac.new(key, message.encode("utf-8"), hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(digest).decode("utf-8")
+    return base64.urlsafe_b64encode(digest).decode("ascii")
 
 
 def build_clob_headers(
@@ -52,15 +58,13 @@ def build_clob_headers(
     if not available, which may or may not be accepted by the server.
     """
     timestamp = int(datetime.now().timestamp())
-    headers: dict[str, str] = {
+    # All 5 POLY_* headers are always sent; omitting POLY_ADDRESS or
+    # POLY_PASSPHRASE causes generic "Invalid api key" 401s from the server.
+    return {
+        POLY_ADDRESS: wallet_address,
+        POLY_API_KEY: api_key,
+        POLY_PASSPHRASE: api_passphrase,
         POLY_SIGNATURE: _hmac_sig(api_secret, timestamp, method, path, body),
         POLY_TIMESTAMP: str(timestamp),
-        POLY_API_KEY: api_key,
         "Content-Type": "application/json",
     }
-    # Include optional headers only when values are present
-    if wallet_address:
-        headers[POLY_ADDRESS] = wallet_address
-    if api_passphrase:
-        headers[POLY_PASSPHRASE] = api_passphrase
-    return headers

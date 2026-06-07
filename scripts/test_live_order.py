@@ -3,15 +3,22 @@ Test live order placement: place a $0.01 limit buy YES on current BTC5M market,
 wait 5 seconds, cancel it. Verifies Polymarket CLOB credentials work end-to-end.
 
 Usage:
-    python scripts/test_live_order.py
+    python scripts/test_live_order.py          # normal run
+    python scripts/test_live_order.py --debug  # print signing details + headers
 
 Required .env:
-    POLYMARKET_API_KEY    — API key from Polymarket settings
-    POLYMARKET_SECRET     — base64url HMAC secret (or POLYMARKET_PRIVATE_KEY as fallback)
+    POLYMARKET_API_KEY    — API key
+    POLYMARKET_SECRET     — base64url HMAC secret (or POLYMARKET_PRIVATE_KEY fallback)
 
-Optional .env:
-    POLYMARKET_PASSPHRASE     — sent as POLY_PASSPHRASE header; omitted if not set
-    POLYMARKET_WALLET_ADDRESS — sent as POLY_ADDRESS header; omitted if not set
+Optional .env (sent as empty string if absent, not omitted):
+    POLYMARKET_PASSPHRASE     — POLY_PASSPHRASE header value
+    POLYMARKET_WALLET_ADDRESS — POLY_ADDRESS header value
+
+NOTE: "Invalid api key" usually means the key was not created via the CLOB
+credential derivation flow (GET /auth/derive-api-key with an EIP-712 wallet
+signature). Website dashboard keys are a different type and will be rejected
+by the CLOB trading API. You need your Ethereum wallet private key to derive
+real CLOB credentials — see scripts/derive_creds.py once eth-account is added.
 """
 from __future__ import annotations
 
@@ -27,6 +34,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+DEBUG = "--debug" in sys.argv
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import httpx
@@ -41,59 +49,113 @@ CLOB_URL = "https://clob.polymarket.com"
 GAMMA_URL = "https://gamma-api.polymarket.com"
 SERIES_TICKER = "btc-up-or-down-5m"
 
-TEST_PRICE = 0.01   # intentionally unfillable
-TEST_SIZE = 1.0     # $1 notional
+TEST_PRICE = 0.01
+TEST_SIZE = 1.0
 
 
 # ------------------------------------------------------------------ #
-# HMAC-SHA256 L2 signing                                              #
+# HMAC-SHA256 L2 signing — matches current py-sdk exactly            #
 # ------------------------------------------------------------------ #
+
+def _pad_base64(value: str) -> str:
+    """Add missing base64 padding characters."""
+    padding = (-len(value)) % 4
+    return value + "=" * padding
+
 
 def _hmac_sig(secret: str, timestamp: int, method: str, path: str, body: str) -> str:
-    """Matches py-clob-client build_hmac_signature exactly."""
-    key = base64.urlsafe_b64decode(secret)
-    message = str(timestamp) + method + path + body.replace("'", '"')
+    """
+    Matches py-sdk/py_sdk/signing/hmac.py build_hmac_signature:
+      message = timestamp + method + path + body   (no quote replacement)
+      key     = base64url_decode(padded_secret)
+      sig     = base64url_encode(HMAC-SHA256(key, message))
+    """
+    key = base64.urlsafe_b64decode(_pad_base64(secret))
+    message = str(timestamp) + method + path
+    if body:
+        message += body                        # no .replace("'", '"')
     digest = hmac.new(key, message.encode("utf-8"), hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(digest).decode("utf-8")
+    return base64.urlsafe_b64encode(digest).decode("ascii")
 
 
 def _auth_headers(creds: dict, method: str, path: str, body: str = "") -> dict[str, str]:
+    """
+    All 5 POLY_* headers always sent (empty string when value unknown).
+    Omitting POLY_ADDRESS or POLY_PASSPHRASE causes generic 'Invalid api key' errors.
+    """
     timestamp = int(datetime.now().timestamp())
-    headers: dict[str, str] = {
-        "POLY_SIGNATURE": _hmac_sig(creds["secret"], timestamp, method, path, body),
-        "POLY_TIMESTAMP": str(timestamp),
+    sig = _hmac_sig(creds["secret"], timestamp, method, path, body)
+
+    if DEBUG:
+        print(f"\n[DEBUG] Signing string : {timestamp!r}{method!r}{path!r}"
+              f"{(body[:80] + '…') if len(body) > 80 else body!r}")
+        print(f"[DEBUG] Headers (redacted):")
+        print(f"  POLY_ADDRESS    : {creds['wallet']!r}")
+        print(f"  POLY_API_KEY    : {creds['api_key'][:8]}...")
+        print(f"  POLY_PASSPHRASE : {creds['passphrase']!r}")
+        print(f"  POLY_SIGNATURE  : {sig[:16]}...  (base64url HMAC-SHA256)")
+        print(f"  POLY_TIMESTAMP  : {timestamp}")
+
+    return {
+        "POLY_ADDRESS": creds["wallet"],          # empty string if unknown
         "POLY_API_KEY": creds["api_key"],
+        "POLY_PASSPHRASE": creds["passphrase"],   # empty string if not issued
+        "POLY_SIGNATURE": sig,
+        "POLY_TIMESTAMP": str(timestamp),
         "Content-Type": "application/json",
     }
-    if creds.get("passphrase"):
-        headers["POLY_PASSPHRASE"] = creds["passphrase"]
-    if creds.get("wallet"):
-        headers["POLY_ADDRESS"] = creds["wallet"]
-    return headers
 
+
+# ------------------------------------------------------------------ #
+# Credential loading                                                  #
+# ------------------------------------------------------------------ #
 
 def _load_creds() -> dict:
     api_key = os.getenv("POLYMARKET_API_KEY", "")
-    # Accept POLYMARKET_SECRET; fall back to POLYMARKET_PRIVATE_KEY (legacy name)
     secret = os.getenv("POLYMARKET_SECRET") or os.getenv("POLYMARKET_PRIVATE_KEY", "")
-    if not api_key or not secret:
-        raise RuntimeError(
-            "Missing .env vars: need POLYMARKET_API_KEY and POLYMARKET_SECRET "
-            "(or POLYMARKET_PRIVATE_KEY)"
+
+    missing = []
+    if not api_key:  missing.append("POLYMARKET_API_KEY")
+    if not secret:   missing.append("POLYMARKET_SECRET (or POLYMARKET_PRIVATE_KEY)")
+    if missing:
+        raise RuntimeError(f"Missing .env vars: {', '.join(missing)}")
+
+    passphrase = os.getenv("POLYMARKET_PASSPHRASE", "")
+    wallet = os.getenv("POLYMARKET_WALLET_ADDRESS", "")
+
+    log.info("Credentials:")
+    log.info("  POLYMARKET_API_KEY       : %s...", api_key[:8])
+    log.info("  POLYMARKET_SECRET        : %s... (len=%d)", secret[:8], len(secret))
+    log.info("  POLYMARKET_PASSPHRASE    : %s", repr(passphrase) if passphrase else "''" + "  ← not set, sending empty string")
+    log.info("  POLYMARKET_WALLET_ADDRESS: %s", wallet or "''" + "  ← not set, sending empty string")
+
+    if api_key.startswith("019") or (len(api_key) > 20 and "-" not in api_key):
+        log.warning(
+            "API key looks like a dashboard/website key. "
+            "The CLOB trading API requires credentials derived from your Ethereum "
+            "wallet via GET /auth/derive-api-key (EIP-712 L1 auth). "
+            "A website key will return 'Invalid api key'."
         )
-    creds = {
-        "api_key": api_key,
-        "secret": secret,
-        "passphrase": os.getenv("POLYMARKET_PASSPHRASE", ""),
-        "wallet": os.getenv("POLYMARKET_WALLET_ADDRESS", ""),
-    }
-    log.info(
-        "Credentials loaded: api_key=%s...  passphrase=%s  wallet=%s",
-        api_key[:8],
-        "set" if creds["passphrase"] else "not set (omitting header)",
-        creds["wallet"] or "not set (omitting header)",
-    )
-    return creds
+
+    return {"api_key": api_key, "secret": secret, "passphrase": passphrase, "wallet": wallet}
+
+
+# ------------------------------------------------------------------ #
+# Verify signing at GET /time (no auth needed — just checks our      #
+# clock matches the server, which affects HMAC freshness)            #
+# ------------------------------------------------------------------ #
+
+async def _check_server_time(client: httpx.AsyncClient) -> None:
+    try:
+        resp = await client.get(f"{CLOB_URL}/time", timeout=5.0)
+        server_ts = resp.json().get("time", 0)
+        our_ts = int(time.time())
+        skew = abs(server_ts - our_ts)
+        log.info("Server time: %d  Our time: %d  Skew: %ds", server_ts, our_ts, skew)
+        if skew > 30:
+            log.warning("Clock skew %ds > 30s — HMAC freshness window may be exceeded", skew)
+    except Exception as exc:
+        log.warning("Could not check server time: %s", exc)
 
 
 # ------------------------------------------------------------------ #
@@ -157,6 +219,33 @@ async def _find_current_market(client: httpx.AsyncClient) -> dict:
 
 
 # ------------------------------------------------------------------ #
+# Dry-run: hit a lightweight authenticated endpoint first             #
+# ------------------------------------------------------------------ #
+
+async def _dry_run_auth(client: httpx.AsyncClient, creds: dict) -> None:
+    """GET /auth/api-keys — authenticated, read-only. Confirms key+sig work."""
+    path = "/auth/api-keys"
+    resp = await client.get(
+        f"{CLOB_URL}{path}",
+        headers=_auth_headers(creds, "GET", path),
+        timeout=10.0,
+    )
+    if resp.status_code == 401:
+        raise RuntimeError(
+            f"Auth dry-run failed 401: {resp.text[:300]}\n\n"
+            "Most likely cause: the API key was not created via the CLOB credential\n"
+            "derivation flow. Website dashboard keys are NOT valid for CLOB trading.\n"
+            "You need your Ethereum wallet private key. Add it to .env as\n"
+            "POLYMARKET_PRIVATE_KEY and run: python scripts/test_live_order.py\n"
+            "(once derive_creds support is re-added via eth-account)."
+        )
+    if resp.status_code == 200:
+        log.info("Auth dry-run OK — key recognised. Keys: %s", resp.text[:120])
+    else:
+        log.warning("Auth dry-run status %d: %s", resp.status_code, resp.text[:120])
+
+
+# ------------------------------------------------------------------ #
 # Order placement / cancellation                                      #
 # ------------------------------------------------------------------ #
 
@@ -177,9 +266,7 @@ async def _place_order(client: httpx.AsyncClient, creds: dict, yes_token_id: str
         timeout=15.0,
     )
     if not resp.is_success:
-        raise RuntimeError(
-            f"POST /order failed {resp.status_code}: {resp.text[:300]}"
-        )
+        raise RuntimeError(f"POST /order failed {resp.status_code}: {resp.text[:300]}")
     data = resp.json()
     if not isinstance(data, dict):
         raise RuntimeError(f"Unexpected response type: {data!r}")
@@ -198,9 +285,7 @@ async def _cancel_order(client: httpx.AsyncClient, creds: dict, order_id: str) -
         timeout=15.0,
     )
     if not resp.is_success:
-        raise RuntimeError(
-            f"DELETE {path} failed {resp.status_code}: {resp.text[:300]}"
-        )
+        raise RuntimeError(f"DELETE {path} failed {resp.status_code}: {resp.text[:300]}")
     log.info("Order cancelled: id=%s", order_id)
 
 
@@ -211,6 +296,8 @@ async def _cancel_order(client: httpx.AsyncClient, creds: dict, order_id: str) -
 async def run() -> None:
     creds = _load_creds()
     async with httpx.AsyncClient() as client:
+        await _check_server_time(client)
+        await _dry_run_auth(client, creds)        # fail fast with clear message
         market = await _find_current_market(client)
         log.info(
             "Placing test order: token=%s  price=%.2f  size=%.2f",
@@ -218,10 +305,8 @@ async def run() -> None:
         )
         t0 = time.monotonic()
         order_id = await _place_order(client, creds, market["yes_token_id"])
-
         log.info("Waiting 5 seconds before cancelling...")
         await asyncio.sleep(5)
-
         await _cancel_order(client, creds, order_id)
         elapsed = time.monotonic() - t0
 
