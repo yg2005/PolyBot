@@ -10,13 +10,14 @@ Requires .env with POLYMARKET_API_KEY and POLYMARKET_PRIVATE_KEY.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import os
 import sys
 import time
-import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# Allow running from repo root without installing the package
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import httpx
@@ -31,9 +32,8 @@ GAMMA_URL = "https://gamma-api.polymarket.com"
 CLOB_URL = "https://clob.polymarket.com"
 SERIES_TICKER = "btc-up-or-down-5m"
 
-# Intentionally unfilllable price — will never match
-TEST_PRICE = 0.01
-TEST_SIZE_USD = 1.0
+TEST_PRICE = 0.01   # intentionally unfillable
+TEST_SIZE = 1.0     # $1 notional
 
 
 def _get_creds() -> tuple[str, str]:
@@ -46,33 +46,101 @@ def _get_creds() -> tuple[str, str]:
     return api_key, private_key
 
 
+def _is_btc5m_market(item: dict) -> bool:
+    """Same logic as PolymarketClient._is_btc5m_market."""
+    for event in item.get("events", []):
+        for s in event.get("series", []):
+            if s.get("ticker") == SERIES_TICKER:
+                return True
+    series: str = item.get("series_ticker") or item.get("seriesTicker") or ""
+    ticker: str = item.get("ticker") or ""
+    return series == SERIES_TICKER or ticker == SERIES_TICKER
+
+
+def _parse_market(item: dict) -> dict | None:
+    """Extract fields needed for order placement."""
+    try:
+        raw = item.get("clobTokenIds") or item.get("clob_token_ids") or []
+        token_ids: list[str] = json.loads(raw) if isinstance(raw, str) else raw
+        if len(token_ids) < 2:
+            return None
+        end_raw = (
+            item.get("endDate")
+            or item.get("end_date_utc")
+            or item.get("end_date")
+            or ""
+        )
+        end_date = datetime.fromisoformat(end_raw.replace("Z", "+00:00"))
+        return {
+            "question": item.get("question") or item.get("title") or "",
+            "condition_id": str(item.get("conditionId") or ""),
+            "end_date": end_date,
+            "yes_token_id": str(token_ids[0]),
+        }
+    except Exception as exc:
+        log.warning("Failed to parse market item: %s — %s", exc, item)
+        return None
+
+
 async def _find_current_market(client: httpx.AsyncClient) -> dict:
-    """Return the nearest active BTC5M market from Gamma API."""
+    """Return the nearest active BTC5M market using the same query as the bot."""
+    now = datetime.now(timezone.utc)
+    end_max = now + timedelta(minutes=15)
+
     resp = await client.get(
         f"{GAMMA_URL}/markets",
-        params={"series_ticker": SERIES_TICKER, "active": "true", "limit": "10"},
+        params={
+            "active": "true",
+            "closed": "false",
+            "limit": 500,
+            "order": "endDate",
+            "ascending": "true",
+            "end_date_min": now.isoformat(),
+            "end_date_max": end_max.isoformat(),
+        },
         timeout=10.0,
     )
     resp.raise_for_status()
-    markets = resp.json()
-    if not markets:
-        raise RuntimeError(f"No active markets found for series_ticker={SERIES_TICKER}")
-    # Take first (nearest) market
-    market = markets[0] if isinstance(markets, list) else markets.get("markets", [])[0]
-    log.info("Market: %s  condition_id=%s", market.get("question", "?"), market.get("conditionId", "?"))
+    data = resp.json()
+    items = data if isinstance(data, list) else data.get("markets", [])
+
+    candidates: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if not _is_btc5m_market(item):
+            continue
+        parsed = _parse_market(item)
+        if parsed:
+            candidates.append(parsed)
+
+    if not candidates:
+        raise RuntimeError(
+            f"No active BTC5M markets found (series_ticker={SERIES_TICKER}). "
+            "Is the market currently between windows?"
+        )
+
+    # nearest by end_date
+    market = min(candidates, key=lambda m: m["end_date"])
+    log.info(
+        "Found market: %s  end=%s  yes_token=%s",
+        market["question"],
+        market["end_date"].isoformat(),
+        market["yes_token_id"],
+    )
     return market
 
 
 async def _place_order(
-    client: httpx.AsyncClient, api_key: str, condition_id: str, token_id: str
+    client: httpx.AsyncClient, api_key: str, yes_token_id: str
 ) -> str:
-    """Place a GTC limit buy YES at $0.01. Returns order_id."""
+    """Place a GTC limit buy YES at TEST_PRICE. Returns order_id."""
     payload = {
         "order": {
-            "tokenID": token_id,
+            "tokenID": yes_token_id,
             "price": str(TEST_PRICE),
             "side": "BUY",
-            "size": str(TEST_SIZE_USD),
+            "size": str(TEST_SIZE),
             "type": "LIMIT",
             "timeInForce": "GTC",
         },
@@ -87,14 +155,18 @@ async def _place_order(
     )
     resp.raise_for_status()
     data = resp.json()
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Unexpected order response type {type(data)}: {data!r}")
     order_id = data.get("orderID") or data.get("order_id") or data.get("id")
     if not order_id:
         raise RuntimeError(f"No order_id in response: {data}")
-    log.info("Order placed: order_id=%s price=%.2f size=%.2f", order_id, TEST_PRICE, TEST_SIZE_USD)
-    return order_id
+    log.info("Order placed: order_id=%s  price=%.2f  size=%.2f", order_id, TEST_PRICE, TEST_SIZE)
+    return str(order_id)
 
 
-async def _cancel_order(client: httpx.AsyncClient, api_key: str, order_id: str) -> None:
+async def _cancel_order(
+    client: httpx.AsyncClient, api_key: str, order_id: str
+) -> None:
     resp = await client.delete(
         f"{CLOB_URL}/order/{order_id}",
         headers={"Authorization": f"Bearer {api_key}"},
@@ -109,20 +181,13 @@ async def run() -> None:
 
     async with httpx.AsyncClient() as client:
         market = await _find_current_market(client)
-        condition_id = market.get("conditionId") or market.get("condition_id", "")
-
-        # YES token is tokens[0] by Polymarket convention
-        tokens = market.get("tokens") or market.get("clobTokenIds") or []
-        if not tokens:
-            raise RuntimeError("Could not find token IDs in market response")
-        yes_token_id = tokens[0] if isinstance(tokens, list) else tokens.get("yes", "")
 
         log.info(
             "Placing test order: YES token=%s price=%.2f size=%.2f",
-            yes_token_id, TEST_PRICE, TEST_SIZE_USD,
+            market["yes_token_id"], TEST_PRICE, TEST_SIZE,
         )
         t0 = time.monotonic()
-        order_id = await _place_order(client, api_key, condition_id, yes_token_id)
+        order_id = await _place_order(client, api_key, market["yes_token_id"])
 
         log.info("Waiting 5 seconds before cancelling...")
         await asyncio.sleep(5)
@@ -130,11 +195,11 @@ async def run() -> None:
         await _cancel_order(client, api_key, order_id)
         elapsed = time.monotonic() - t0
 
-    print(f"\nSUCCESS — place+cancel round-trip completed in {elapsed:.1f}s")
-    print(f"  market   : {market.get('question', '?')}")
+    print(f"\nSUCCESS — place+cancel round-trip in {elapsed:.1f}s")
+    print(f"  market   : {market['question']}")
     print(f"  order_id : {order_id}")
     print(f"  price    : {TEST_PRICE}")
-    print(f"  size_usd : {TEST_SIZE_USD}")
+    print(f"  size_usd : {TEST_SIZE}")
 
 
 def main() -> None:
