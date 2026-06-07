@@ -103,6 +103,7 @@ async def _derive_creds(client: httpx.AsyncClient, private_key: str) -> dict:
             f"GET /auth/derive-api-key failed {resp.status_code}: {resp.text[:300]}"
         )
     body = resp.json()
+    print(f"\n[DIAG] /auth/derive-api-key full response: {json.dumps(body, indent=2)}")
     api_key    = body.get("apiKey")     or body.get("api_key", "")
     secret     = body.get("secret",    "")
     passphrase = body.get("passphrase","")
@@ -114,6 +115,7 @@ async def _derive_creds(client: httpx.AsyncClient, private_key: str) -> dict:
         "secret":     secret,
         "passphrase": passphrase,
         "wallet":     account.address,
+        "eoa":        account.address,
     }
 
 
@@ -232,8 +234,7 @@ async def _place_order(
         size_usdc=TEST_SIZE,
         fee_rate_bps=0,
     )
-    if DEBUG:
-        print(f"\n[DEBUG] signed_order={json.dumps(signed_order, indent=2)}")
+    print(f"\n[DIAG] order struct being sent:\n{json.dumps(signed_order, indent=2)}")
 
     payload = {
         "order":     signed_order,
@@ -249,7 +250,7 @@ async def _place_order(
         timeout=15.0,
     )
     if not resp.is_success:
-        raise RuntimeError(f"POST /order failed {resp.status_code}: {resp.text[:300]}")
+        raise RuntimeError(f"POST /order failed {resp.status_code}: {resp.text}")
     data     = resp.json()
     order_id = data.get("orderID") or data.get("order_id") or data.get("id")
     if not order_id:
@@ -287,6 +288,24 @@ async def run() -> None:
 
     async with httpx.AsyncClient() as client:
         creds  = await _derive_creds(client, private_key)
+
+        # Diagnostic: fetch profile to see what proxy wallet Polymarket knows about
+        try:
+            profile_resp = await client.get(
+                f"{CLOB_URL}/profile",
+                headers=_auth_headers(creds, "GET", "/profile"),
+                timeout=10.0,
+            )
+            print(f"\n[DIAG] GET /profile ({profile_resp.status_code}):")
+            print(json.dumps(profile_resp.json(), indent=2) if profile_resp.is_success else profile_resp.text[:300])
+        except Exception as e:
+            print(f"[DIAG] GET /profile failed: {e}")
+
+        print(f"\n[DIAG] EOA (private key wallet):  {creds['eoa']}")
+        print(f"[DIAG] POLY_ADDRESS in requests:   {creds['wallet']}")
+        print(f"[DIAG] POLYMARKET_PROXY_WALLET env: {proxy_wallet}")
+        print(f"[DIAG] order maker will be:        {proxy_wallet}")
+
         market = await _find_market(client)
         log.info(
             "Placing test order: token=%s  price=%.2f  size=%.2f",
