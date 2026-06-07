@@ -7,6 +7,7 @@ import httpx
 
 from ..config import KalbotConfig
 from ..data.db import Database
+from .clob_auth import build_clob_headers
 from .paper import PaperExecutor
 
 if TYPE_CHECKING:
@@ -32,6 +33,9 @@ class OrderManager:
         self._paper = PaperExecutor(cfg.execution, db)
         self._clob_url = cfg.feeds.clob_api_url
         self._api_key = cfg.polymarket_api_key
+        self._api_secret = cfg.polymarket_api_secret
+        self._api_passphrase = cfg.polymarket_api_passphrase
+        self._wallet_address = cfg.polymarket_wallet_address
         self._private_key = cfg.polymarket_private_key
         self._nonce = 0
         # Live mode: old_order_id → new_order_id after cancel+replace amend
@@ -150,9 +154,10 @@ class OrderManager:
                 f"Kill switch is engaged: {self._kill_switch.reason}"
             )
 
-        if not self._api_key or not self._private_key:
+        if not self._api_key or not self._api_secret or not self._api_passphrase or not self._wallet_address:
             raise RuntimeError(
-                "Live mode requires POLYMARKET_API_KEY and POLYMARKET_PRIVATE_KEY env vars."
+                "Live mode requires POLYMARKET_API_KEY, POLYMARKET_SECRET, "
+                "POLYMARKET_PASSPHRASE, and POLYMARKET_WALLET_ADDRESS env vars."
             )
 
         # Apply size ramp for live orders
@@ -175,14 +180,22 @@ class OrderManager:
             "feeRateBps": "50",
         }
         try:
+            import json as _json
+            body = _json.dumps(payload)
+            headers = build_clob_headers(
+                api_key=self._api_key,
+                api_secret=self._api_secret,
+                api_passphrase=self._api_passphrase,
+                wallet_address=self._wallet_address,
+                method="POST",
+                path="/order",
+                body=body,
+            )
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
                     f"{self._clob_url}/order",
-                    json=payload,
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
+                    content=body,
+                    headers=headers,
                 )
                 if self._kill_switch is not None:
                     self._kill_switch.record_api_response(resp.status_code)
@@ -242,13 +255,21 @@ class OrderManager:
         return True
 
     async def _live_cancel(self, order_id: str) -> bool:
-        if not self._api_key:
+        if not self._api_key or not self._api_secret:
             return False
         try:
+            headers = build_clob_headers(
+                api_key=self._api_key,
+                api_secret=self._api_secret,
+                api_passphrase=self._api_passphrase,
+                wallet_address=self._wallet_address,
+                method="DELETE",
+                path=f"/order/{order_id}",
+            )
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.delete(
                     f"{self._clob_url}/order/{order_id}",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    headers=headers,
                 )
                 if self._kill_switch is not None:
                     self._kill_switch.record_api_response(resp.status_code)
