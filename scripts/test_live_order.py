@@ -177,10 +177,12 @@ def _parse_market(item: dict) -> dict | None:
         if len(ids) < 2:
             return None
         end_raw = item.get("endDate") or item.get("end_date_utc") or item.get("end_date") or ""
+        neg_risk = bool(item.get("negRisk") or item.get("neg_risk") or False)
         return {
             "question":     item.get("question") or item.get("title") or "",
             "end_date":     datetime.fromisoformat(end_raw.replace("Z", "+00:00")),
             "yes_token_id": str(ids[0]),
+            "neg_risk":     neg_risk,
         }
     except Exception as exc:
         log.warning("Failed to parse market: %s", exc)
@@ -210,7 +212,23 @@ async def _find_market(client: httpx.AsyncClient) -> dict:
     if not candidates:
         raise RuntimeError("No active BTC5M markets — between windows?")
     market = min(candidates, key=lambda m: m["end_date"])
-    log.info("Market: %s  end=%s", market["question"], market["end_date"].isoformat())
+
+    # Confirm neg_risk from CLOB API (gamma doesn't always return it)
+    try:
+        clob_resp = await client.get(
+            f"{CLOB_URL}/markets/{market['yes_token_id']}", timeout=10.0
+        )
+        if clob_resp.is_success:
+            clob_data = clob_resp.json()
+            market["neg_risk"] = bool(clob_data.get("neg_risk", market["neg_risk"]))
+    except Exception as e:
+        log.warning("Could not fetch neg_risk from CLOB: %s", e)
+
+    log.info(
+        "Market: %s  end=%s  neg_risk=%s",
+        market["question"], market["end_date"].isoformat(), market["neg_risk"],
+    )
+    print(f"[DIAG] neg_risk={market['neg_risk']}  exchange={'0xC5d563A36AE78145C45a50134d48A1215220f80a' if market['neg_risk'] else '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E'}")
     return market
 
 
@@ -224,6 +242,7 @@ async def _place_order(
     token_id: str,
     private_key: str,
     proxy_wallet: str,
+    neg_risk: bool = False,
 ) -> str:
     signed_order = build_signed_order(
         private_key=private_key,
@@ -233,6 +252,7 @@ async def _place_order(
         price=TEST_PRICE,
         size_usdc=TEST_SIZE,
         fee_rate_bps=0,
+        neg_risk=neg_risk,
     )
     print(f"\n[DIAG] order struct being sent:\n{json.dumps(signed_order, indent=2)}")
 
@@ -242,7 +262,8 @@ async def _place_order(
         "orderType": "GTC",
         "postOnly":  False,
     }
-    body = json.dumps(payload)
+    # Compact JSON matches py-clob-client's separators=(",",":") — HMAC signs the exact bytes sent
+    body = json.dumps(payload, separators=(",", ":"))
     resp = await client.post(
         f"{CLOB_URL}/order",
         content=body,
@@ -313,7 +334,8 @@ async def run() -> None:
         )
         t0       = time.monotonic()
         order_id = await _place_order(
-            client, creds, market["yes_token_id"], private_key, proxy_wallet
+            client, creds, market["yes_token_id"], private_key, proxy_wallet,
+            neg_risk=market["neg_risk"],
         )
         log.info("Waiting 5 seconds before cancelling...")
         await asyncio.sleep(5)

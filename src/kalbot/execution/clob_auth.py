@@ -30,10 +30,11 @@ POLY_NONCE      = "POLY_NONCE"
 POLY_API_KEY    = "POLY_API_KEY"
 POLY_PASSPHRASE = "POLY_PASSPHRASE"
 
-_POLYGON_CHAIN_ID = 137
-_CLOB_AUTH_MSG    = "This message attests that I control the given wallet"
-_CTF_EXCHANGE     = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
-_ZERO_ADDR        = "0x0000000000000000000000000000000000000000"
+_POLYGON_CHAIN_ID     = 137
+_CLOB_AUTH_MSG        = "This message attests that I control the given wallet"
+_CTF_EXCHANGE         = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+_CTF_NEG_RISK_EXCHANGE = "0xC5d563A36AE78145C45a50134d48A1215220f80a"
+_ZERO_ADDR            = "0x0000000000000000000000000000000000000000"
 
 _ORDER_EIP712_TYPES: dict = {
     "EIP712Domain": [
@@ -176,6 +177,7 @@ def build_signed_order(
     size_usdc: float,
     fee_rate_bps: int = 0,
     nonce: int = 0,
+    neg_risk: bool = False,
     chain_id: int = _POLYGON_CHAIN_ID,
 ) -> dict:
     """EIP-712 sign a CTF Exchange order.  Returns dict ready for POST /order body.
@@ -184,6 +186,7 @@ def build_signed_order(
     price: 0..1 (e.g. 0.72)
     size_usdc: USDC notional (e.g. 10.0)
     proxy_wallet: maker address — from POLYMARKET_PROXY_WALLET env var.
+    neg_risk: True for neg-risk markets (uses different exchange contract).
     signatureType=1 (POLY_PROXY): maker=proxy, signer=EOA.
 
     Amount encoding (matches py_order_utils):
@@ -194,6 +197,7 @@ def build_signed_order(
     """
     from eth_account import Account
 
+    exchange  = _CTF_NEG_RISK_EXCHANGE if neg_risk else _CTF_EXCHANGE
     account   = Account.from_key(private_key)
     eoa       = account.address
     side_int  = 0 if side == "BUY" else 1
@@ -211,7 +215,7 @@ def build_signed_order(
             "name":              "Polymarket CTF Exchange",
             "version":           "1",
             "chainId":           chain_id,
-            "verifyingContract": _CTF_EXCHANGE,
+            "verifyingContract": exchange,
         },
         "types":       _ORDER_EIP712_TYPES,
         "primaryType": "Order",
@@ -234,8 +238,9 @@ def build_signed_order(
     signed    = account.sign_typed_data(full_message=typed_data)
     signature = "0x" + signed.signature.hex()
 
+    # salt stays int — matches SignedOrder.dict() in py_order_utils which does NOT str(salt)
     return {
-        "salt":          str(salt),
+        "salt":          salt,
         "maker":         proxy_wallet,
         "signer":        eoa,
         "taker":         _ZERO_ADDR,
