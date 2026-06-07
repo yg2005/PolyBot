@@ -36,7 +36,6 @@ class OrderManager:
         self._api_secret = cfg.polymarket_api_secret
         self._api_passphrase = cfg.polymarket_api_passphrase
         self._wallet_address = cfg.polymarket_wallet_address
-        self._private_key = cfg.polymarket_private_key
         self._nonce = 0
         # Live mode: old_order_id → new_order_id after cancel+replace amend
         self._live_redirects: dict[str, str] = {}
@@ -154,10 +153,9 @@ class OrderManager:
                 f"Kill switch is engaged: {self._kill_switch.reason}"
             )
 
-        if not self._api_key or not self._api_secret or not self._api_passphrase or not self._wallet_address:
+        if not self._api_key or not self._api_secret:
             raise RuntimeError(
-                "Live mode requires POLYMARKET_API_KEY, POLYMARKET_SECRET, "
-                "POLYMARKET_PASSPHRASE, and POLYMARKET_WALLET_ADDRESS env vars."
+                "Live mode requires POLYMARKET_API_KEY and POLYMARKET_SECRET env vars."
             )
 
         # Apply size ramp for live orders
@@ -185,11 +183,11 @@ class OrderManager:
             headers = build_clob_headers(
                 api_key=self._api_key,
                 api_secret=self._api_secret,
-                api_passphrase=self._api_passphrase,
-                wallet_address=self._wallet_address,
                 method="POST",
                 path="/order",
                 body=body,
+                api_passphrase=self._api_passphrase,
+                wallet_address=self._wallet_address,
             )
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
@@ -261,10 +259,10 @@ class OrderManager:
             headers = build_clob_headers(
                 api_key=self._api_key,
                 api_secret=self._api_secret,
-                api_passphrase=self._api_passphrase,
-                wallet_address=self._wallet_address,
                 method="DELETE",
                 path=f"/order/{order_id}",
+                api_passphrase=self._api_passphrase,
+                wallet_address=self._wallet_address,
             )
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.delete(

@@ -110,10 +110,9 @@ class KalbotConfig(BaseModel):
 
     # Secrets — loaded from env, never from TOML
     polymarket_api_key: str = Field(default="", repr=False)
-    polymarket_api_secret: str = Field(default="", repr=False)      # base64url — HMAC signing
-    polymarket_api_passphrase: str = Field(default="", repr=False)
-    polymarket_wallet_address: str = Field(default="", repr=False)  # derived from private_key if blank
-    polymarket_private_key: str = Field(default="", repr=False)     # L1 EIP-712 auth + wallet address derivation
+    polymarket_api_secret: str = Field(default="", repr=False)      # base64url HMAC secret (POLYMARKET_SECRET or fallback POLYMARKET_PRIVATE_KEY)
+    polymarket_api_passphrase: str = Field(default="", repr=False)  # optional — empty string if not issued
+    polymarket_wallet_address: str = Field(default="", repr=False)  # optional — 0x address for POLY_ADDRESS header
     discord_webhook_url: str = Field(default="", repr=False)
     telegram_bot_token: str = Field(default="", repr=False)
     telegram_chat_id: str = Field(default="", repr=False)
@@ -132,10 +131,13 @@ def load_config() -> KalbotConfig:
 
     # Inject secrets from environment
     cfg.polymarket_api_key = os.getenv("POLYMARKET_API_KEY", "")
-    cfg.polymarket_api_secret = os.getenv("POLYMARKET_SECRET", "")
+    # POLYMARKET_SECRET is canonical; fall back to POLYMARKET_PRIVATE_KEY (old name)
+    cfg.polymarket_api_secret = (
+        os.getenv("POLYMARKET_SECRET")
+        or os.getenv("POLYMARKET_PRIVATE_KEY", "")
+    )
     cfg.polymarket_api_passphrase = os.getenv("POLYMARKET_PASSPHRASE", "")
     cfg.polymarket_wallet_address = os.getenv("POLYMARKET_WALLET_ADDRESS", "")
-    cfg.polymarket_private_key = os.getenv("POLYMARKET_PRIVATE_KEY", "")
     cfg.discord_webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "")
     cfg.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     cfg.telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
