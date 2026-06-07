@@ -26,9 +26,10 @@ class OrderManager:
     """
 
     def __init__(self, cfg: KalbotConfig, db: Database) -> None:
-        self._mode        = cfg.execution.mode
-        self._paper       = PaperExecutor(cfg.execution, db)
-        self._private_key = cfg.polymarket_private_key
+        self._mode         = cfg.execution.mode
+        self._paper        = PaperExecutor(cfg.execution, db)
+        self._private_key  = cfg.polymarket_private_key
+        self._proxy_wallet = cfg.polymarket_proxy_wallet or None  # None → SDK auto-derives deposit wallet
         self._live_redirects:  dict[str, str]                    = {}
         self._live_order_meta: dict[str, tuple[str, str, float]] = {}
         self._kill_switch: KillSwitch | None = None
@@ -112,8 +113,14 @@ class OrderManager:
         if not self._private_key:
             raise RuntimeError("Live mode requires POLYMARKET_PRIVATE_KEY")
 
-        client = SecureClient.create(private_key=self._private_key)
-        log.info("SecureClient ready: wallet=%s", client.wallet)
+        client = SecureClient.create(
+            private_key=self._private_key,
+            wallet=self._proxy_wallet,
+        )
+        log.info(
+            "SecureClient ready: wallet=%s  (proxy_wallet=%s)",
+            client.wallet, self._proxy_wallet or "auto-derived",
+        )
         self._clob_client = client
         return client
 

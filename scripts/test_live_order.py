@@ -2,7 +2,8 @@
 Test live order placement via polymarket-client (official Polymarket SDK).
 
 Flow:
-  1. Init SecureClient — auto-derives deposit wallet and API credentials
+  1. Init SecureClient — pass proxy wallet explicitly (Google/Magic) or let SDK
+     auto-derive the deposit wallet from the private key (EOA flow)
   2. Find the nearest active BTC5M market via Gamma API
   3. Place a $1 limit buy YES at $0.01 (intentionally unfillable — sits deep in book)
   4. Wait 5 seconds, cancel it
@@ -10,6 +11,11 @@ Flow:
 
 Required .env:
     POLYMARKET_PRIVATE_KEY    — 0x-prefixed Ethereum private key
+
+Optional .env:
+    POLYMARKET_PROXY_WALLET   — proxy wallet address for Google/Magic accounts;
+                                omit for EOA / standard deposit wallet flow
+                                (SDK derives it from the private key automatically)
 """
 from __future__ import annotations
 
@@ -89,12 +95,18 @@ def _find_btc5m_market() -> dict:
 
 
 def main() -> None:
-    private_key = os.getenv("POLYMARKET_PRIVATE_KEY", "")
+    private_key  = os.getenv("POLYMARKET_PRIVATE_KEY", "")
+    proxy_wallet = os.getenv("POLYMARKET_PROXY_WALLET", "") or None
     if not private_key:
         raise SystemExit("POLYMARKET_PRIVATE_KEY not set in .env")
 
-    log.info("Initialising SecureClient (derives wallet + credentials) ...")
-    with SecureClient.create(private_key=private_key) as client:
+    if proxy_wallet:
+        log.info("Using explicit proxy wallet: %s", proxy_wallet)
+    else:
+        log.info("No POLYMARKET_PROXY_WALLET set — SDK will auto-derive deposit wallet")
+
+    log.info("Initialising SecureClient ...")
+    with SecureClient.create(private_key=private_key, wallet=proxy_wallet) as client:
         log.info("Wallet: %s", client.wallet)
 
         log.info("Searching for active BTC5M market ...")
