@@ -1,13 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-import httpx
-
 from ..config import KalbotConfig
 from ..data.db import Database
-from .clob_auth import build_clob_headers, build_signed_order
 from .paper import PaperExecutor
 
 if TYPE_CHECKING:
@@ -17,7 +15,6 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Taker fee for edge-vs-fee comparisons
 TAKER_FEE = 0.005
 
 
@@ -25,29 +22,22 @@ class OrderManager:
     """Routes orders to paper executor (default) or live Polymarket CLOB.
 
     Paper mode: all state lives in PaperExecutor (in-memory + SQLite).
-    Live mode: POST /order to CLOB API; paper executor is never called.
+    Live mode: uses py-clob-client for order placement and cancellation.
     """
 
     def __init__(self, cfg: KalbotConfig, db: Database) -> None:
-        self._mode = cfg.execution.mode
-        self._paper = PaperExecutor(cfg.execution, db)
-        self._clob_url = cfg.feeds.clob_api_url
-        self._api_key = cfg.polymarket_api_key
-        self._api_secret = cfg.polymarket_api_secret
-        self._api_passphrase = cfg.polymarket_api_passphrase
-        self._wallet_address = cfg.polymarket_wallet_address
-        self._proxy_wallet = cfg.polymarket_proxy_wallet
-        self._private_key = cfg.polymarket_private_key
-        self._nonce = 0
-        # Live mode: old_order_id → new_order_id after cancel+replace amend
-        self._live_redirects: dict[str, str] = {}
-        # Live mode: order_id → (window_id, side, size_usd) for cancel+replace
+        self._mode          = cfg.execution.mode
+        self._paper         = PaperExecutor(cfg.execution, db)
+        self._private_key   = cfg.polymarket_private_key
+        self._proxy_wallet  = cfg.polymarket_proxy_wallet
+        self._nonce         = 0
+        self._live_redirects:  dict[str, str]                 = {}
         self._live_order_meta: dict[str, tuple[str, str, float]] = {}
-        # Optional injected dependencies (set after construction)
         self._kill_switch: KillSwitch | None = None
-        self._ramp: SizeRamp | None = None
-        self._risk: RiskManager | None = None
-        self._max_daily_loss_usd: float = cfg.risk.max_daily_loss_usd
+        self._ramp:        SizeRamp | None   = None
+        self._risk:        RiskManager | None = None
+        self._max_daily_loss_usd = cfg.risk.max_daily_loss_usd
+        self._clob_client = None  # lazily initialised in live mode
 
     # ------------------------------------------------------------------ #
     # Dependency injection                                                 #
@@ -74,37 +64,24 @@ class OrderManager:
         price: float,
         size_usd: float,
     ) -> tuple[str, float | None]:
-        """Place an order. Returns (order_id, fill_price | None).
-
-        fill_price is None for pending maker orders — poll get_order_status.
-        """
         if self._mode == "live":
             return await self._live_place(window_id, side, strategy, price, size_usd)
         return await self._paper.place_order(window_id, side, strategy, price, size_usd)
 
     async def amend_order(self, order_id: str, new_price: float) -> bool:
-        """Improve limit price on a pending order."""
         if self._mode == "live":
             return await self._live_amend(order_id, new_price)
         return await self._paper.amend_order(order_id, new_price)
 
     async def cancel_order(self, order_id: str, reason: str = "") -> bool:
-        """Cancel a pending order."""
         if self._mode == "live":
             return await self._live_cancel(order_id)
         return await self._paper.cancel_order(order_id, reason)
 
     def get_order_status(self, order_id: str) -> Any:
-        """Returns PaperOrder in paper mode.
-
-        In live mode: follows the redirect chain from cancel+replace amends,
-        returns a minimal status dict with state="OPEN" if the order is
-        active (no better info without a live status poll).
-        """
         if self._mode == "live":
-            # Follow redirect chain if cancel+replace happened
             current_id = order_id
-            seen = set()
+            seen: set[str] = set()
             while current_id in self._live_redirects and current_id not in seen:
                 seen.add(current_id)
                 current_id = self._live_redirects[current_id]
@@ -114,23 +91,48 @@ class OrderManager:
         return self._paper.get_order_status(order_id)
 
     def get_fill(self, window_id: str) -> dict | None:
-        """Return fill dict for window if a filled order exists."""
         if self._mode == "live":
-            return None  # live fills tracked externally
+            return None
         return self._paper.get_fill(window_id)
 
     async def settle_positions(self, window_id: str, outcome: str) -> float | None:
-        """Compute and log P&L for a settled window."""
         if self._mode == "live":
-            return None  # live P&L computed from actual fills
+            return None
         return await self._paper.settle_positions(window_id, outcome)
 
     # ------------------------------------------------------------------ #
-    # Live CLOB integration (gated behind mode == "live")                 #
+    # Live CLOB integration                                               #
     # ------------------------------------------------------------------ #
 
+    def _get_clob_client(self):
+        """Return a cached ClobClient with Level 2 auth (lazy init)."""
+        if self._clob_client is not None:
+            return self._clob_client
+
+        from py_clob_client.client import ClobClient
+        from py_order_utils.model import POLY_PROXY
+
+        if not self._private_key or not self._proxy_wallet:
+            raise RuntimeError(
+                "Live mode requires POLYMARKET_PRIVATE_KEY and POLYMARKET_PROXY_WALLET"
+            )
+
+        client = ClobClient(
+            host="https://clob.polymarket.com",
+            key=self._private_key,
+            chain_id=137,
+            signature_type=POLY_PROXY,
+            funder=self._proxy_wallet,
+        )
+        creds = client.derive_api_key()
+        if creds is None:
+            raise RuntimeError("Failed to derive Polymarket API credentials")
+        client.set_api_creds(creds)
+        log.info("ClobClient ready: address=%s  api_key=%s...", client.get_address(), creds.api_key[:8])
+        self._clob_client = client
+        return client
+
     async def cancel_all_live(self) -> int:
-        """Cancel every tracked live order. Returns count of successful cancels."""
         if self._mode != "live":
             return 0
         count = 0
@@ -148,88 +150,48 @@ class OrderManager:
         price: float,
         size_usd: float,
     ) -> tuple[str, float | None]:
-        """POST /order to Polymarket CLOB. Raises if not live-ready."""
-        # Kill switch guard
         if self._kill_switch is not None and self._kill_switch.is_engaged():
-            raise RuntimeError(
-                f"Kill switch is engaged: {self._kill_switch.reason}"
-            )
+            raise RuntimeError(f"Kill switch engaged: {self._kill_switch.reason}")
 
-        if not self._api_key or not self._api_secret:
-            raise RuntimeError(
-                "Live mode requires POLYMARKET_API_KEY and POLYMARKET_SECRET env vars."
-            )
-        if not self._private_key or not self._proxy_wallet:
-            raise RuntimeError(
-                "Live mode requires POLYMARKET_PRIVATE_KEY and POLYMARKET_PROXY_WALLET env vars."
-            )
-
-        # Apply size ramp for live orders
         if self._ramp is not None and self._risk is not None:
             size_usd = self._ramp.apply(
-                size_usd,
-                self._risk.daily_pnl,
-                self._max_daily_loss_usd,
+                size_usd, self._risk.daily_pnl, self._max_daily_loss_usd
             )
 
-        order_type = "GTC" if strategy in ("maker", "adaptive") else "FOK"
-        self._nonce += 1
-        signed_order = build_signed_order(
-            private_key=self._private_key,
-            proxy_wallet=self._proxy_wallet,
-            token_id=window_id,  # callers must pass token_id as window_id for live
-            side=side,
+        from py_clob_client.clob_types import OrderArgs
+
+        # window_id is the CTF token_id in live mode
+        # size in OrderArgs is ConditionalTokens (shares), not USDC
+        shares = size_usd / price
+        order_args = OrderArgs(
+            token_id=window_id,
             price=price,
-            size_usdc=size_usd,
-            fee_rate_bps=0,
-            nonce=self._nonce,
+            size=shares,
+            side=side,
         )
-        payload = {
-            "order":     signed_order,
-            "owner":     self._api_key,
-            "orderType": order_type,
-            "postOnly":  False,
-        }
+        self._nonce += 1
+        order_args.nonce = self._nonce
+
+        clob = self._get_clob_client()
+
         try:
-            import json as _json
-            body = _json.dumps(payload)
-            headers = build_clob_headers(
-                api_key=self._api_key,
-                api_secret=self._api_secret,
-                method="POST",
-                path="/order",
-                body=body,
-                api_passphrase=self._api_passphrase,
-                wallet_address=self._wallet_address,
-            )
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    f"{self._clob_url}/order",
-                    content=body,
-                    headers=headers,
-                )
-                if self._kill_switch is not None:
-                    self._kill_switch.record_api_response(resp.status_code)
-                resp.raise_for_status()
-                data = resp.json()
-        except httpx.HTTPStatusError as exc:
-            log.error("CLOB order rejected: %s — %s", exc.response.status_code, exc.response.text)
-            raise
+            data = await asyncio.to_thread(clob.create_and_post_order, order_args)
         except Exception as exc:
             log.error("CLOB place_order failed: %s", exc)
+            if self._kill_switch is not None:
+                self._kill_switch.record_api_response(500)
             raise
 
         if self._kill_switch is not None:
             self._kill_switch.record_internet_ok()
+            self._kill_switch.record_api_response(200)
 
-        order_id = data.get("orderID", "") or data.get("id", "")
-        status = data.get("status", "unknown")
+        order_id = (data or {}).get("orderID", "") or (data or {}).get("id", "")
+        status   = (data or {}).get("status", "unknown")
         fill_price: float | None = None
         if status in ("matched", "filled"):
-            fill_price = float(data.get("price", price))
-        elif status == "partially_matched":
-            # Partial fill: treat as pending for now; full fill will come via event
-            fill_price = None
+            fill_price = float((data or {}).get("price", price))
+
         if order_id:
             self._live_order_meta[order_id] = (window_id, side, size_usd)
         log.info(
@@ -239,58 +201,37 @@ class OrderManager:
         return order_id, fill_price
 
     async def _live_amend(self, order_id: str, new_price: float) -> bool:
-        """Cancel + replace for live CLOB (Polymarket has no native amend).
-
-        Cancels the existing order, places a new one at new_price, and registers
-        a redirect so get_order_status(old_id) transparently follows to the new order.
-        """
         meta = self._live_order_meta.get(order_id)
         if meta is None:
             log.warning("LiveAmend %s — no metadata found, cannot replace", order_id)
             return False
         window_id, side, size_usd = meta
 
-        cancelled = await self._live_cancel(order_id)
-        if not cancelled:
+        if not await self._live_cancel(order_id):
             return False
 
         try:
             new_id, _ = await self._live_place(window_id, side, "maker", new_price, size_usd)
         except Exception as exc:
-            log.error("LiveAmend %s — replacement place_order failed: %s", order_id, exc)
+            log.error("LiveAmend %s — replacement failed: %s", order_id, exc)
             return False
 
-        # Register redirect: old_id → new_id so adaptive loop status checks follow through
         self._live_redirects[order_id] = new_id
         log.info("LiveAmend %s → %s @ %.4f", order_id, new_id, new_price)
         return True
 
     async def _live_cancel(self, order_id: str) -> bool:
-        if not self._api_key or not self._api_secret:
-            return False
+        clob = self._get_clob_client()
         try:
-            headers = build_clob_headers(
-                api_key=self._api_key,
-                api_secret=self._api_secret,
-                method="DELETE",
-                path=f"/order/{order_id}",
-                api_passphrase=self._api_passphrase,
-                wallet_address=self._wallet_address,
-            )
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.delete(
-                    f"{self._clob_url}/order/{order_id}",
-                    headers=headers,
-                )
-                if self._kill_switch is not None:
-                    self._kill_switch.record_api_response(resp.status_code)
-                resp.raise_for_status()
-            if self._kill_switch is not None:
-                self._kill_switch.record_internet_ok()
-            # Remove from meta so cancel_all_live doesn't retry
-            self._live_order_meta.pop(order_id, None)
-            log.info("LiveCancel %s OK", order_id)
-            return True
+            await asyncio.to_thread(clob.cancel, order_id)
         except Exception as exc:
             log.error("LiveCancel %s failed: %s", order_id, exc)
+            if self._kill_switch is not None:
+                self._kill_switch.record_api_response(500)
             return False
+
+        if self._kill_switch is not None:
+            self._kill_switch.record_internet_ok()
+        self._live_order_meta.pop(order_id, None)
+        log.info("LiveCancel %s OK", order_id)
+        return True
