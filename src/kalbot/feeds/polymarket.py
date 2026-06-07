@@ -11,6 +11,19 @@ import httpx
 
 log = logging.getLogger(__name__)
 
+BTC5M_SERIES_TICKER = "POLYBTC5M"
+
+
+def is_btc5m_market(item: dict, series_ticker: str = BTC5M_SERIES_TICKER) -> bool:
+    """Return True if *item* (Gamma API market dict) belongs to the BTC5M series."""
+    for event in item.get("events", []):
+        for s in event.get("series", []):
+            if s.get("ticker") == series_ticker:
+                return True
+    series: str = item.get("series_ticker") or item.get("seriesTicker") or ""
+    ticker: str = item.get("ticker") or ""
+    return series == series_ticker or ticker == series_ticker
+
 
 @dataclass
 class MarketInfo:
@@ -143,19 +156,7 @@ class PolymarketClient:
         return markets
 
     def _is_btc5m_market(self, item: dict) -> bool:
-        # Primary: check nested events[].series[].ticker — most reliable
-        for event in item.get("events", []):
-            for s in event.get("series", []):
-                if s.get("ticker") == self._series_ticker:
-                    return True
-
-        # Fallback: top-level series/ticker fields
-        series: str = item.get("series_ticker") or item.get("seriesTicker") or ""
-        ticker: str = item.get("ticker") or ""
-        if series == self._series_ticker or ticker == self._series_ticker:
-            return True
-
-        return False
+        return is_btc5m_market(item, self._series_ticker)
 
     def _parse_market(self, item: dict) -> MarketInfo | None:
         try:

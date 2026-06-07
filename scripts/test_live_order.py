@@ -31,6 +31,8 @@ from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import ApiCreds, OrderArgs
 from py_order_utils.model import POLY_PROXY
 
+from kalbot.feeds.polymarket import BTC5M_SERIES_TICKER, is_btc5m_market
+
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -38,7 +40,6 @@ log = logging.getLogger("test_live_order")
 
 CLOB_URL      = "https://clob.polymarket.com"
 GAMMA_URL     = "https://gamma-api.polymarket.com"
-SERIES_TICKER = "btc-up-or-down-5m"
 CHAIN_ID      = 137
 
 TEST_PRICE     = 0.01  # intentionally unfillable — sits deep in the book
@@ -66,8 +67,7 @@ def _find_btc5m_market() -> dict:
 
     candidates = []
     for item in items:
-        series = item.get("seriesTicker") or item.get("series_ticker") or ""
-        if series != SERIES_TICKER:
+        if not is_btc5m_market(item):
             continue
         raw = item.get("clobTokenIds") or item.get("clob_token_ids") or "[]"
         ids = json.loads(raw) if isinstance(raw, str) else raw
@@ -87,7 +87,7 @@ def _find_btc5m_market() -> dict:
         })
 
     if not candidates:
-        raise RuntimeError("No active BTC5M markets found — try between :00 and :04 of any 5-min window")
+        raise RuntimeError(f"No active {BTC5M_SERIES_TICKER} markets found — try between :00 and :04 of any 5-min window")
     return min(candidates, key=lambda m: m["end_date"])
 
 
