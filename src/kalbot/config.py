@@ -67,15 +67,9 @@ class EngineConfig(BaseModel):
 class ExecutionConfig(BaseModel):
     mode: str = "paper"
     default_order_size_usd: float = 10.0
-    live_stake_usd: float = 1.0
-    ramp_multiplier: float = 0.10
     maker_timeout_seconds: int = 30
     taker_threshold_seconds: int = 60
     cancel_on_reversal: bool = True
-
-    @property
-    def effective_live_stake_usd(self) -> float:
-        return round(self.live_stake_usd * self.ramp_multiplier, 4)
 
     @field_validator("mode")
     @classmethod

@@ -1,4 +1,5 @@
+[engine]
+scorer = "ml"
+
 [execution]
 mode = "live"
-live_stake_usd = 10.0
-ramp_multiplier = 0.10

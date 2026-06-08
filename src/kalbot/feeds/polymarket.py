@@ -11,7 +11,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-BTC5M_SERIES_TICKER = "POLYBTC5M"
+BTC5M_SERIES_TICKER = "btc-up-or-down-5m"
 
 
 def is_btc5m_market(item: dict, series_ticker: str = BTC5M_SERIES_TICKER) -> bool:
@@ -58,7 +58,7 @@ class PolymarketClient:
         gamma_url: str = "https://gamma-api.polymarket.com",
         clob_url: str = "https://clob.polymarket.com",
         discovery_interval_s: int = 30,
-        series_ticker: str = "POLYBTC5M",
+        series_ticker: str = "btc-up-or-down-5m",
     ) -> None:
         self._gamma_url = gamma_url
         self._clob_url = clob_url

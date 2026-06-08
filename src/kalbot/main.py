@@ -324,6 +324,7 @@ class KalBot:
                 wid = f"{market.condition_id}_{bucket}"
 
                 strategy = dec.strategy or "taker"
+                token_id = (market.yes_token_id if side == "YES" else market.no_token_id)
                 if strategy == "adaptive":
                     # Spec: limit at (mid - spread/4) for YES; mirror for NO
                     if ob is not None:
@@ -352,9 +353,12 @@ class KalBot:
                         get_remaining=_get_remaining,
                         get_btc_direction=_get_direction,
                         initial_direction=snap.direction,
+                        token_id=token_id,
                     )
                 else:
-                    order_id, fill = await self._order_mgr.place_order(wid, side, strategy, entry, size)
+                    order_id, fill = await self._order_mgr.place_order(
+                        wid, side, strategy, entry, size, token_id=token_id,
+                    )
 
                 # Phase 10: reconcile live fill vs expected (fire-and-forget)
                 if (

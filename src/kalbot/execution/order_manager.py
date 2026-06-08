@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..config import KalbotConfig
 from ..data.db import Database
-from .paper import PaperExecutor
+from .paper import PaperExecutor, _compute_pnl
 
 if TYPE_CHECKING:
     from ..kill_switch import KillSwitch
@@ -32,6 +32,8 @@ class OrderManager:
         self._proxy_wallet = cfg.polymarket_proxy_wallet or None  # None → SDK auto-derives deposit wallet
         self._live_redirects:  dict[str, str]                    = {}
         self._live_order_meta: dict[str, tuple[str, str, float]] = {}
+        # window_id → fill dict (live mode P&L tracking)
+        self._live_fills: dict[str, dict] = {}
         self._kill_switch: KillSwitch | None = None
         self._ramp:        SizeRamp | None   = None
         self._risk:        RiskManager | None = None
@@ -62,9 +64,10 @@ class OrderManager:
         strategy: str,
         price: float,
         size_usd: float,
+        token_id: str | None = None,
     ) -> tuple[str, float | None]:
         if self._mode == "live":
-            return await self._live_place(window_id, side, strategy, price, size_usd)
+            return await self._live_place(window_id, side, strategy, price, size_usd, token_id)
         return await self._paper.place_order(window_id, side, strategy, price, size_usd)
 
     async def amend_order(self, order_id: str, new_price: float) -> bool:
@@ -91,12 +94,15 @@ class OrderManager:
 
     def get_fill(self, window_id: str) -> dict | None:
         if self._mode == "live":
-            return None
+            return self._live_fills.get(window_id)
         return self._paper.get_fill(window_id)
 
     async def settle_positions(self, window_id: str, outcome: str) -> float | None:
         if self._mode == "live":
-            return None
+            pos = self._live_fills.get(window_id)
+            if pos is None or pos.get("fill_price") is None:
+                return None
+            return _compute_pnl(pos["side"], pos["fill_price"], outcome, pos["size_usd"])
         return await self._paper.settle_positions(window_id, outcome)
 
     # ------------------------------------------------------------------ #
@@ -141,6 +147,7 @@ class OrderManager:
         strategy: str,
         price: float,
         size_usd: float,
+        token_id: str | None = None,
     ) -> tuple[str, float | None]:
         if self._kill_switch is not None and self._kill_switch.is_engaged():
             raise RuntimeError(f"Kill switch engaged: {self._kill_switch.reason}")
@@ -152,7 +159,12 @@ class OrderManager:
 
         from polymarket import AcceptedOrder
 
-        # window_id is the CTF token_id in live mode
+        if token_id is None:
+            raise RuntimeError(
+                f"token_id is required for live orders (window_id={window_id}). "
+                "Pass market.yes_token_id or market.no_token_id at the call site."
+            )
+
         # size is ConditionalTokens (shares), not USDC
         shares = size_usd / price
         clob = self._get_clob_client()
@@ -160,7 +172,7 @@ class OrderManager:
         try:
             resp = await asyncio.to_thread(
                 clob.place_limit_order,
-                token_id=window_id,
+                token_id=token_id,
                 price=price,
                 size=shares,
                 side=side,
@@ -185,9 +197,18 @@ class OrderManager:
             fill_price = price
 
         self._live_order_meta[order_id] = (window_id, side, size_usd)
+        # Record fill for P&L tracking; use limit price as expected fill
+        self._live_fills[window_id] = {
+            "side": side,
+            "fill_price": fill_price if fill_price is not None else price,
+            "size_usd": size_usd,
+            "order_id": order_id,
+            "token_id": token_id,
+            "status": resp.status,
+        }
         log.info(
-            "LiveOrder %s | %s %s @ %.4f size=%.2f status=%s",
-            order_id, side, strategy, price, size_usd, resp.status,
+            "LiveOrder %s | %s %s @ %.4f size=%.2f status=%s token=%s...",
+            order_id, side, strategy, price, size_usd, resp.status, token_id[:12],
         )
         return order_id, fill_price
 

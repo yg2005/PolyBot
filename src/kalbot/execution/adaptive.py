@@ -58,6 +58,7 @@ class AdaptiveExecutor:
         get_remaining: Callable[[], int],
         get_btc_direction: Callable[[], int],
         initial_direction: int,
+        token_id: str | None = None,
     ) -> tuple[str, float | None]:
         """Place initial maker order and start escalation loop in background.
 
@@ -66,7 +67,7 @@ class AdaptiveExecutor:
         every SUBSEQUENT_IMPROVE_S until filled, cancelled, or converted to taker.
         """
         order_id, fill_price = await self._mgr.place_order(
-            window_id, side, "maker", limit_price, size_usd
+            window_id, side, "maker", limit_price, size_usd, token_id=token_id,
         )
 
         if fill_price is not None:
@@ -79,6 +80,7 @@ class AdaptiveExecutor:
             self._escalation_loop(
                 order_id, window_id, side, limit_price, size_usd,
                 edge, get_remaining, get_btc_direction, initial_direction,
+                token_id=token_id,
             ),
             name=f"AdaptiveEscalation-{order_id}",
         )
@@ -107,6 +109,7 @@ class AdaptiveExecutor:
         get_remaining: Callable[[], int],
         get_btc_direction: Callable[[], int],
         initial_direction: int,
+        token_id: str | None = None,
     ) -> None:
         current_price = initial_price
         amendment_count = 0
@@ -153,7 +156,8 @@ class AdaptiveExecutor:
                     if cancelled:
                         taker_price = current_price + PRICE_STEP * (amendment_count + 1)
                         new_order_id, fill_price = await self._mgr.place_order(
-                            window_id, side, "taker", taker_price, size_usd
+                            window_id, side, "taker", taker_price, size_usd,
+                            token_id=token_id,
                         )
                         log.info(
                             "AdaptiveEscalation %s | converted to taker %s fill=%.4f",
