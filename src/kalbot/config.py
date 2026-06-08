@@ -67,6 +67,7 @@ class EngineConfig(BaseModel):
 class ExecutionConfig(BaseModel):
     mode: str = "paper"
     default_order_size_usd: float = 10.0
+    max_live_stake_usd: float = 100.0  # hard ceiling applied after Kelly sizing
     maker_timeout_seconds: int = 30
     taker_threshold_seconds: int = 60
     cancel_on_reversal: bool = True

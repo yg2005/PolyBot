@@ -18,6 +18,7 @@ class DecisionEngine:
         self._min_edge_pct = cfg.risk.min_edge_pct
         self._max_position_usd = cfg.risk.max_position_usd
         self._default_size_usd = cfg.execution.default_order_size_usd
+        self._max_live_stake_usd = cfg.execution.max_live_stake_usd
         self._bankroll = cfg.risk.starting_bankroll_usd
         self._risk = risk
 
@@ -64,10 +65,11 @@ class DecisionEngine:
         if snapshot.spread > MAX_SPREAD_USD:
             return _pass(f"spread={snapshot.spread:.4f} > max={MAX_SPREAD_USD}")
 
-        # 6. Kelly sizing — computed last; floor $5
+        # 6. Kelly sizing — computed last; floor $5, hard ceiling from config
         size_usd = self._kelly_size(score, snapshot)
         if size_usd < MIN_SIZE_USD:
             return _pass(f"kelly_size={size_usd:.2f} < floor={MIN_SIZE_USD:.2f}")
+        size_usd = min(size_usd, self._max_live_stake_usd)
 
         # 7. Strategy selection
         remaining = snapshot.remaining_seconds
