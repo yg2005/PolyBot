@@ -198,48 +198,54 @@ class KalBot:
     async def _polymarket_monitor(self) -> None:
         assert self._poly is not None
         while not self._shutdown.is_set():
-            # Settle BEFORE discovering next market to avoid _current_market being
-            # overwritten before settlement fires (~17% missing settlement_outcome).
-            if self._lifecycle.check_expiry() and self._current_market:
-                await self._settle_window(self._current_market)
-                self._current_market = None
+            try:
+                # Settle BEFORE discovering next market to avoid _current_market being
+                # overwritten before settlement fires (~17% missing settlement_outcome).
+                if self._lifecycle.check_expiry() and self._current_market:
+                    await self._settle_window(self._current_market)
+                    self._current_market = None
 
-            markets = self._poly.active_markets
-            if markets:
-                if not self._polymarket_ready:
-                    self._polymarket_ready = True
-                    log.info("Polymarket ready — %d market(s)", len(markets))
-                await self._metrics.update_polymarket(ok=True, market_count=len(markets))
-                if not self._feeds_ready:
-                    await asyncio.sleep(5)
-                    continue
-                nearest = self._poly.get_nearest_market()
-                if nearest and self._cl_price and nearest.end_date.replace(
-                    tzinfo=timezone.utc if nearest.end_date.tzinfo is None else nearest.end_date.tzinfo
-                ) > datetime.now(timezone.utc):
-                    if self._lifecycle.on_market_discovered(
-                        nearest.market_id, nearest.condition_id,
-                        nearest.end_date, self._cl_price,
-                    ):
-                        self._current_market = nearest
-                        self._logged_intervals.clear()
-                        self._window_signal = "PASS"
-                        self._window_entry = None
-                        self._primary_bucket_logged = False
-                        ob = await self._poly.fetch_orderbook(nearest)
-                        if ob:
-                            self._last_ob = ob
-                        log.info("Window started: %s", nearest.question)
-                        await self._metrics.update_window(
-                            market_id=nearest.market_id,
-                            question=nearest.question,
-                            strike_price=parse_strike(nearest.question) or 0.0,
-                            elapsed_seconds=0,
-                            remaining_seconds=300,
-                            signal="PASS",
-                            traded=False,
-                        )
-                        await self._metrics.increment_session_windows()
+                markets = self._poly.active_markets
+                if markets:
+                    if not self._polymarket_ready:
+                        self._polymarket_ready = True
+                        log.info("Polymarket ready — %d market(s)", len(markets))
+                    await self._metrics.update_polymarket(ok=True, market_count=len(markets))
+                    if not self._feeds_ready:
+                        await asyncio.sleep(5)
+                        continue
+                    nearest = self._poly.get_nearest_market()
+                    if nearest and self._cl_price and nearest.end_date.replace(
+                        tzinfo=timezone.utc if nearest.end_date.tzinfo is None else nearest.end_date.tzinfo
+                    ) > datetime.now(timezone.utc):
+                        if self._lifecycle.on_market_discovered(
+                            nearest.market_id, nearest.condition_id,
+                            nearest.end_date, self._cl_price,
+                        ):
+                            self._current_market = nearest
+                            self._logged_intervals.clear()
+                            self._window_signal = "PASS"
+                            self._window_entry = None
+                            self._primary_bucket_logged = False
+                            ob = await self._poly.fetch_orderbook(nearest)
+                            if ob:
+                                self._last_ob = ob
+                            log.info("Window started: %s", nearest.question)
+                            await self._metrics.update_window(
+                                market_id=nearest.market_id,
+                                question=nearest.question,
+                                strike_price=parse_strike(nearest.question) or 0.0,
+                                elapsed_seconds=0,
+                                remaining_seconds=300,
+                                signal="PASS",
+                                traded=False,
+                            )
+                            await self._metrics.increment_session_windows()
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.error("PolymarketMonitor error (loop continues): %s", exc, exc_info=True)
 
             await asyncio.sleep(5)
 
@@ -249,23 +255,28 @@ class KalBot:
 
     async def _snapshot_task(self) -> None:
         while not self._shutdown.is_set():
-            await asyncio.sleep(0.5)
-            if not self._current_market or not self._feeds_ready:
-                continue
-            if not self._network_healthy:
-                log.warning("Network unhealthy (gaierror) — pausing trading")
-                continue
-            if self._lifecycle.is_trading_blocked():
-                continue
-            # Phase 2 spec: Chainlink OR Polymarket stale >10s → pause trading
-            if self._chainlink and self._chainlink.is_stale:
-                log.warning("Chainlink stale — pausing trading")
-                continue
-            elapsed = int(self._tracker.elapsed_seconds)
-            for bucket in self._cfg.data.snapshot_at_seconds:
-                if elapsed >= bucket and bucket not in self._logged_intervals:
-                    self._logged_intervals.add(bucket)
-                    await self._do_snapshot(bucket)
+            try:
+                await asyncio.sleep(0.5)
+                if not self._current_market or not self._feeds_ready:
+                    continue
+                if not self._network_healthy:
+                    log.warning("Network unhealthy (gaierror) — pausing trading")
+                    continue
+                if self._lifecycle.is_trading_blocked():
+                    continue
+                # Phase 2 spec: Chainlink OR Polymarket stale >10s → pause trading
+                if self._chainlink and self._chainlink.is_stale:
+                    log.warning("Chainlink stale — pausing trading")
+                    continue
+                elapsed = int(self._tracker.elapsed_seconds)
+                for bucket in self._cfg.data.snapshot_at_seconds:
+                    if elapsed >= bucket and bucket not in self._logged_intervals:
+                        self._logged_intervals.add(bucket)
+                        await self._do_snapshot(bucket)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.error("SnapshotTask error (loop continues): %s", exc, exc_info=True)
 
     async def _do_snapshot(self, bucket: int) -> None:
         market = self._current_market
@@ -508,6 +519,8 @@ class KalBot:
             await server.serve()
         except asyncio.CancelledError:
             server.should_exit = True
+        except Exception as exc:
+            log.error("Dashboard crashed (non-fatal): %s", exc, exc_info=True)
 
     # ------------------------------------------------------------------ #
     # Start / stop                                                         #
