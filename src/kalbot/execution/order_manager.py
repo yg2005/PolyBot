@@ -167,6 +167,7 @@ class OrderManager:
 
         # size is ConditionalTokens (shares), not USDC
         shares = size_usd / price
+        clob_side = "BUY" if side == "YES" else "SELL"
         clob = self._get_clob_client()
 
         try:
@@ -175,7 +176,7 @@ class OrderManager:
                 token_id=token_id,
                 price=price,
                 size=shares,
-                side=side,
+                side=clob_side,
             )
         except Exception as exc:
             log.error("CLOB place_order failed: %s", exc)
