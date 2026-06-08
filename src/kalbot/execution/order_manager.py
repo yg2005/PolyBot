@@ -54,6 +54,7 @@ class OrderManager:
         self._ramp:        SizeRamp | None   = None
         self._risk:        RiskManager | None = None
         self._max_daily_loss_usd = cfg.risk.max_daily_loss_usd
+        self._max_live_stake_usd = cfg.execution.max_live_stake_usd
         self._clob_client = None  # lazily initialised in live mode
 
     # ------------------------------------------------------------------ #
@@ -185,6 +186,19 @@ class OrderManager:
         price = round(price, 2)
         # size is ConditionalTokens (shares), not USDC
         shares = size_usd / price
+        if shares < 5.0:
+            min_size_usd = price * 5.0
+            if min_size_usd > self._max_live_stake_usd * 2:
+                raise RuntimeError(
+                    f"Min order size ${min_size_usd:.2f} (5 shares @ {price:.2f}) exceeds "
+                    f"2x max_live_stake_usd cap ${self._max_live_stake_usd * 2:.2f} — skipping trade"
+                )
+            log.warning(
+                "shares=%.2f < 5 minimum — bumping size_usd %.2f → %.2f (5 shares @ %.2f)",
+                shares, size_usd, min_size_usd, price,
+            )
+            size_usd = min_size_usd
+            shares = 5.0
         clob_side = "BUY" if side == "YES" else "SELL"
         clob = self._get_clob_client()
 
