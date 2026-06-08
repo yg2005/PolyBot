@@ -9,7 +9,7 @@ The flag prevents any new orders until manually cleared:
 
 Auto-triggers (when embedded in the bot):
 - Internet drop > 60 s
-- 5 consecutive API 5xx errors
+- 5 consecutive API 5xx (server) errors — 4xx client errors do NOT count
 - Uncaught exception passed via engage()
 """
 from __future__ import annotations
@@ -170,6 +170,9 @@ class KillSwitch:
 
     def start_monitor(self) -> None:
         """Start the background internet-drop monitor (call from async context)."""
+        # Reset transient counters so a previous (crashed) run's state doesn't carry over.
+        self._consecutive_5xx = 0
+        self._last_internet_ok = time.monotonic()
         self._running = True
         self._monitor_task = asyncio.create_task(
             self._internet_monitor(), name="KillSwitchMonitor"

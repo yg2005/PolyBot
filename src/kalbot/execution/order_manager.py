@@ -4,6 +4,9 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+import httpx
+from polymarket.errors import RequestRejectedError
+
 from ..config import KalbotConfig
 from ..data.db import Database
 from .paper import PaperExecutor, _compute_pnl
@@ -16,6 +19,19 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 TAKER_FEE = 0.005
+
+
+def _http_status(exc: Exception) -> int:
+    """Extract HTTP status code from a polymarket SDK or httpx exception.
+
+    RequestRejectedError carries the real status (400, 422, etc).
+    TransportError/network failures have no status — treat as 503.
+    """
+    if isinstance(exc, RequestRejectedError):
+        return exc.status
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code
+    return 503
 
 
 class OrderManager:
@@ -183,7 +199,7 @@ class OrderManager:
         except Exception as exc:
             log.error("CLOB place_order failed: %s", exc)
             if self._kill_switch is not None:
-                self._kill_switch.record_api_response(500)
+                self._kill_switch.record_api_response(_http_status(exc))
             raise
 
         if self._kill_switch is not None:
@@ -242,7 +258,7 @@ class OrderManager:
         except Exception as exc:
             log.error("LiveCancel %s failed: %s", order_id, exc)
             if self._kill_switch is not None:
-                self._kill_switch.record_api_response(500)
+                self._kill_switch.record_api_response(_http_status(exc))
             return False
 
         if order_id not in resp.canceled:
