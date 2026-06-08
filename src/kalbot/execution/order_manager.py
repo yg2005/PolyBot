@@ -188,14 +188,44 @@ class OrderManager:
         clob_side = "BUY" if side == "YES" else "SELL"
         clob = self._get_clob_client()
 
-        try:
-            resp = await asyncio.to_thread(
-                clob.place_limit_order,
+        def _place() -> object:
+            return clob.place_limit_order(
                 token_id=token_id,
                 price=price,
                 size=shares,
                 side=clob_side,
             )
+
+        try:
+            resp = await asyncio.to_thread(_place)
+        except RequestRejectedError as exc:
+            status = exc.status
+            msg = str(exc)
+            # The SDK's built-in allowance recovery checks for "allowance is not enough"
+            # but the CLOB also returns "not enough balance / allowance: balance: 0" when
+            # its cached index of the on-chain balance is stale. Force a re-index and retry.
+            if status == 400 and ("balance" in msg or "allowance" in msg):
+                log.warning(
+                    "CLOB balance/allowance error — forcing re-index then retrying: %s", msg
+                )
+                try:
+                    await asyncio.to_thread(
+                        clob.get_balance_allowance, asset_type="COLLATERAL"
+                    )
+                except Exception as refresh_exc:
+                    log.error("Balance re-index failed: %s", refresh_exc)
+                try:
+                    resp = await asyncio.to_thread(_place)
+                except Exception as retry_exc:
+                    log.error("CLOB retry after re-index also failed: %s", retry_exc)
+                    if self._kill_switch is not None:
+                        self._kill_switch.record_api_response(_http_status(retry_exc))
+                    raise retry_exc
+            else:
+                log.error("CLOB place_order rejected: %s", msg)
+                if self._kill_switch is not None:
+                    self._kill_switch.record_api_response(status)
+                raise
         except Exception as exc:
             log.error("CLOB place_order failed: %s", exc)
             if self._kill_switch is not None:
