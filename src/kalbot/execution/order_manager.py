@@ -165,6 +165,8 @@ class OrderManager:
                 "Pass market.yes_token_id or market.no_token_id at the call site."
             )
 
+        # CLOB requires price on 0.01 tick grid (max 2 decimal places)
+        price = round(price, 2)
         # size is ConditionalTokens (shares), not USDC
         shares = size_usd / price
         clob_side = "BUY" if side == "YES" else "SELL"
