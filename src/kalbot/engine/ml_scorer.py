@@ -109,11 +109,6 @@ class MLScorer(BaseScorer):
         raw_prob = float(self._model.predict_proba(X)[0, 1])
         cal_prob = float(self._cal.transform(np.array([raw_prob]))[0])
 
-        # Hard confidence floor: both sides need >= 58% directional conviction
-        directional_prob = max(cal_prob, 1.0 - cal_prob)
-        if directional_prob < 0.58:
-            return _pass(f"low_confidence: directional_prob={directional_prob:.4f} < 0.58")
-
         mid = snapshot.mid_price
         if mid <= 0 or mid >= 1:
             return _pass(f"invalid mid_price={mid}")
@@ -131,10 +126,16 @@ class MLScorer(BaseScorer):
         }
 
         if yes_edge >= self._min_edge:
+            # Hard confidence floor: YES requires cal_prob >= 0.58
+            if cal_prob < 0.58:
+                return _pass(f"low_confidence: cal_prob={cal_prob:.4f} < 0.58 for YES")
             signal = "YES"
             edge = yes_edge
             conf = min(CONF_SCALE, cal_prob)
         elif no_edge >= self._min_edge:
+            # Hard confidence floor: NO requires (1 - cal_prob) >= 0.58
+            if (1.0 - cal_prob) < 0.58:
+                return _pass(f"low_confidence: no_prob={1.0 - cal_prob:.4f} < 0.58 for NO")
             signal = "NO"
             edge = no_edge
             conf = min(CONF_SCALE, 1.0 - cal_prob)
