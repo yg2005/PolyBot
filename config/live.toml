@@ -4,3 +4,6 @@ scorer = "ml"
 [execution]
 mode = "live"
 max_live_stake_usd = 1.0
+
+[risk]
+max_entry_price = 0.65

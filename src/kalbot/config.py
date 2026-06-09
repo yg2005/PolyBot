@@ -87,6 +87,7 @@ class RiskConfig(BaseModel):
     max_concurrent_positions: int = 2
     min_edge_pct: float = 3.0
     starting_bankroll_usd: float = 100.0
+    max_entry_price: float = 0.65  # skip trades where token ask exceeds this
 
 
 class DataConfig(BaseModel):
