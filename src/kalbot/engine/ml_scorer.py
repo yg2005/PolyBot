@@ -109,9 +109,10 @@ class MLScorer(BaseScorer):
         raw_prob = float(self._model.predict_proba(X)[0, 1])
         cal_prob = float(self._cal.transform(np.array([raw_prob]))[0])
 
-        # Coin-flip zone: no real edge regardless of calibration method
-        if 0.50 <= cal_prob <= 0.55:
-            return _pass(f"coin_flip: cal_prob={cal_prob:.4f} in [0.50, 0.55]")
+        # Hard confidence floor: both sides need >= 58% directional conviction
+        directional_prob = max(cal_prob, 1.0 - cal_prob)
+        if directional_prob < 0.58:
+            return _pass(f"low_confidence: directional_prob={directional_prob:.4f} < 0.58")
 
         mid = snapshot.mid_price
         if mid <= 0 or mid >= 1:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable, Coroutine
 from datetime import datetime, timezone
 from typing import Any
 
@@ -27,10 +28,13 @@ class LiveMonitor:
         clob_url: str,
         api_key: str,
         mode: str = "paper",
+        balance_fn: Callable[[], Coroutine[Any, Any, float | None]] | None = None,
     ) -> None:
         self._url = clob_url.rstrip("/")
         self._key = api_key
         self._mode = mode
+        # SDK-based balance callback preferred over broken HTTP endpoint
+        self._balance_fn = balance_fn
         self._running = False
         self._task: asyncio.Task[None] | None = None
 
@@ -69,21 +73,25 @@ class LiveMonitor:
     # ------------------------------------------------------------------ #
 
     async def get_usdc_balance(self) -> float | None:
-        """Fetch current USDC balance from CLOB. Returns None on error."""
-        if self._mode != "live" or not self._key:
+        """Fetch current USDC balance. Uses SDK callback if wired; falls back to HTTP."""
+        if self._mode != "live":
             return None
         try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-                resp = await client.get(
-                    f"{self._url}/balance",
-                    headers={"Authorization": f"Bearer {self._key}"},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-            # CLOB returns {"balance": "123.45"} or {"usdc": "123.45"}
-            balance = float(data.get("balance") or data.get("usdc") or 0)
-            self._usdc_balance = balance
-            self._balance_last_checked = datetime.now(timezone.utc)
+            if self._balance_fn is not None:
+                balance = await self._balance_fn()
+            else:
+                # Fallback: try HTTP endpoint (may be unreliable)
+                async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                    resp = await client.get(
+                        f"{self._url}/balance",
+                        headers={"Authorization": f"Bearer {self._key}"},
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                balance = float(data.get("balance") or data.get("usdc") or 0)
+            if balance is not None:
+                self._usdc_balance = balance
+                self._balance_last_checked = datetime.now(timezone.utc)
             return balance
         except Exception as exc:
             log.error("LiveMonitor balance fetch failed: %s", exc)

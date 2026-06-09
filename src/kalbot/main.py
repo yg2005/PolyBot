@@ -139,6 +139,7 @@ class KalBot:
         self._window_signal: str = "PASS"
         self._window_entry: float | None = None
         self._primary_bucket_logged: bool = False
+        self._balance_start: float | None = None  # captured at first live trade
 
     # ------------------------------------------------------------------ #
     # Callbacks                                                            #
@@ -395,6 +396,23 @@ class KalBot:
                 await self._metrics.open_position(wid, side, fill or entry, size)
                 if self._alerts:
                     await self._alerts.trade(side, fill or entry, size, market.question)
+
+                # Log real USDC balance after live trade; track session P&L
+                if self._cfg.execution.mode == "live" and self._order_mgr is not None:
+                    bal = await self._order_mgr.get_usdc_balance()
+                    if bal is not None:
+                        if self._balance_start is None:
+                            self._balance_start = bal
+                        session_pnl = bal - self._balance_start
+                        log.info(
+                            "LiveBalance | usdc=%.2f session_pnl=%+.2f",
+                            bal, session_pnl,
+                        )
+                        if bal < size:
+                            log.error(
+                                "LiveBalance below min_order_size: usdc=%.2f < size=%.2f — pausing",
+                                bal, size,
+                            )
                 return
             elif dec.pass_reason:
                 log.info("PASS: %s", dec.pass_reason)
@@ -582,6 +600,7 @@ class KalBot:
                 clob_url=self._cfg.feeds.clob_api_url,
                 api_key=self._cfg.polymarket_api_key,
                 mode="live",
+                balance_fn=self._order_mgr.get_usdc_balance,
             )
             self._kill_switch.set_order_manager(self._order_mgr)
             self._kill_switch.set_alerts(self._alerts)

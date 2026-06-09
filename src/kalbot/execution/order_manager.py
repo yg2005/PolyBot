@@ -147,6 +147,39 @@ class OrderManager:
         self._clob_client = client
         return client
 
+    async def get_usdc_balance(self) -> float | None:
+        """Return real USDC balance via SDK (COLLATERAL asset, 6-decimal base units)."""
+        if self._mode != "live":
+            return None
+        try:
+            clob = self._get_clob_client()
+            result = await asyncio.to_thread(clob.get_balance_allowance, asset_type="COLLATERAL")
+            return result.balance / 1_000_000
+        except Exception as exc:
+            log.error("get_usdc_balance failed: %s", exc)
+            return None
+
+    async def poll_fill_price(self, order_id: str, window_id: str) -> float | None:
+        """Query CLOB for confirmed fill price; updates live_fills if filled."""
+        if self._mode != "live":
+            return None
+        try:
+            clob = self._get_clob_client()
+            order = await asyncio.to_thread(clob.get_order, order_id=order_id)
+            fill = float(order.size_matched)
+            price = float(order.price)
+            if fill > 0 and window_id in self._live_fills:
+                self._live_fills[window_id]["fill_price"] = price
+                self._live_fills[window_id]["size_matched"] = fill
+                log.info(
+                    "poll_fill_price %s | status=%s matched=%.4f price=%.4f",
+                    order_id, order.status, fill, price,
+                )
+            return price if fill > 0 else None
+        except Exception as exc:
+            log.error("poll_fill_price %s failed: %s", order_id, exc)
+            return None
+
     async def cancel_all_live(self) -> int:
         if self._mode != "live":
             return 0
@@ -199,7 +232,7 @@ class OrderManager:
             )
             size_usd = min_size_usd
             shares = 5.0
-        clob_side = "BUY" if side == "YES" else "SELL"
+        clob_side = "BUY"  # always BUY — YES buys yes_token, NO buys no_token
         clob = self._get_clob_client()
 
         def _place() -> object:
@@ -273,6 +306,16 @@ class OrderManager:
             "LiveOrder %s | %s %s @ %.4f size=%.2f status=%s token=%s...",
             order_id, side, strategy, price, size_usd, resp.status, token_id[:12],
         )
+
+        # If not immediately matched, schedule a deferred fill-price poll (5 s delay).
+        if resp.status != "matched":
+            async def _deferred_poll() -> None:
+                await asyncio.sleep(5)
+                confirmed = await self.poll_fill_price(order_id, window_id)
+                if confirmed is not None:
+                    log.info("LiveOrder fill confirmed: %s @ %.4f", order_id, confirmed)
+            asyncio.create_task(_deferred_poll(), name=f"FillPoll_{order_id}")
+
         return order_id, fill_price
 
     async def _live_amend(self, order_id: str, new_price: float) -> bool:
