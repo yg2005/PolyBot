@@ -57,6 +57,7 @@ def _simulate_fills(
     kelly_fraction: float = 0.25,
     compounding: bool = False,
     maker_fill_rate: float = MAKER_FILL_RATE,
+    max_entry_price: float = 0.65,
 ) -> dict:
     """Simulates fills with bankroll constraints and correct Polymarket fee model.
 
@@ -92,6 +93,10 @@ def _simulate_fills(
             continue
 
         if entry <= 0 or entry >= 1:
+            continue
+        # Mirror decision.py max_entry_price filter: skip expensive tokens
+        if entry > max_entry_price:
+            n_skipped += 1
             continue
 
         # Hard stop — broke
@@ -185,6 +190,7 @@ async def backtest(
     kelly_fraction: float = 0.25,
     compounding: bool = False,
     maker_fill_rate: float = MAKER_FILL_RATE,
+    max_entry_price: float = 0.65,
     min_date: str | None = None,
     max_date: str | None = None,
 ) -> dict:
@@ -234,10 +240,12 @@ async def backtest(
         kelly_fraction=kelly_fraction,
         compounding=compounding,
         maker_fill_rate=maker_fill_rate,
+        max_entry_price=max_entry_price,
     )
     results["model_id"] = reg["model_id"]
     results["taker_fee_rate"] = TAKER_FEE_RATE
     results["maker_fill_rate"] = maker_fill_rate
+    results["max_entry_price"] = max_entry_price
     results["kelly_fraction"] = kelly_fraction
     results["compounding"] = compounding
 
@@ -278,6 +286,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--kelly-fraction", type=float, default=0.25)
     p.add_argument("--compounding", action="store_true", default=False)
     p.add_argument("--maker-fill-rate", type=float, default=MAKER_FILL_RATE)
+    p.add_argument("--max-entry-price", type=float, default=0.65)
     p.add_argument("--min-date", default=None)
     p.add_argument("--max-date", default=None)
     p.add_argument("--log-level", default="INFO")
@@ -289,7 +298,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=args.log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     results = asyncio.run(backtest(
         args.db, args.bankroll, args.kelly_fraction, args.compounding,
-        args.maker_fill_rate, args.min_date, args.max_date,
+        args.maker_fill_rate, args.max_entry_price, args.min_date, args.max_date,
     ))
     for k, v in results.items():
         print(f"  {k}: {v}")

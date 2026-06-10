@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
-from sklearn.calibration import CalibratedClassifierCV, calibration_curve
+from scipy.optimize import minimize_scalar
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 
@@ -34,6 +34,44 @@ def expected_calibration_error(y_true: np.ndarray, y_prob: np.ndarray, n_bins: i
 class Calibrator(Protocol):
     def predict_proba(self, X: np.ndarray) -> np.ndarray: ...
     def transform(self, y_prob: np.ndarray) -> np.ndarray: ...
+
+
+class TemperatureCalibrator:
+    """Temperature scaling: divides logit by a single learned T.
+
+    Preferred over Platt for temporally-ordered financial data: fits one
+    parameter (no base-rate shift), preserves discrimination exactly, and
+    doesn't amplify cal-set label-rate drift onto the test set.
+    """
+
+    def __init__(self) -> None:
+        self.T: float = 1.0
+
+    @staticmethod
+    def _sigmoid(x: np.ndarray) -> np.ndarray:
+        return 1.0 / (1.0 + np.exp(-x))
+
+    @staticmethod
+    def _logit(p: np.ndarray) -> np.ndarray:
+        p = np.clip(p, 1e-7, 1.0 - 1e-7)
+        return np.log(p / (1.0 - p))
+
+    def _nll(self, T: float, y_prob: np.ndarray, y_true: np.ndarray) -> float:
+        scaled = self._sigmoid(self._logit(y_prob) / T)
+        scaled = np.clip(scaled, 1e-7, 1.0 - 1e-7)
+        return -float(np.mean(y_true * np.log(scaled) + (1 - y_true) * np.log(1 - scaled)))
+
+    def fit(self, y_prob: np.ndarray, y_true: np.ndarray) -> "TemperatureCalibrator":
+        res = minimize_scalar(
+            lambda T: self._nll(T, y_prob, y_true),
+            bounds=(0.1, 10.0),
+            method="bounded",
+        )
+        self.T = float(res.x)
+        return self
+
+    def transform(self, y_prob: np.ndarray) -> np.ndarray:
+        return self._sigmoid(self._logit(y_prob) / self.T).clip(0.0, 1.0)
 
 
 class IsotonicCalibrator:
@@ -69,37 +107,35 @@ class PlattCalibrator:
 def fit_calibrator(
     y_prob: np.ndarray,
     y_true: np.ndarray,
-) -> PlattCalibrator:
-    """Fits Platt (sigmoid) calibrator and checks ECE.
+) -> TemperatureCalibrator:
+    """Fits temperature scaling calibrator and checks in-sample ECE.
 
-    Isotonic was dropped: with ~750 cal samples it produces a 22-step
-    staircase that overfits and mis-calibrates borderline buckets.
-    Platt gives a smooth monotone mapping that generalises better.
+    Temperature scaling fits one parameter (T) on the calibration set NLL.
+    Unlike Platt, it does not shift the base-rate, so temporal label-rate
+    drift between the cal and test sets does not corrupt calibration.
     """
-    cal = PlattCalibrator()
-    method = "platt"
-
+    cal = TemperatureCalibrator()
     cal.fit(y_prob, y_true)
-    # In-sample ECE only — isotonic regression overfits training data so this
-    # will be optimistically low. Real ECE is measured on the held-out test set
-    # in train.py after calling cal.transform on test predictions.
+
     y_cal = cal.transform(y_prob)
     ece = expected_calibration_error(y_true, y_cal)
-
-    log.info("Calibration (%s) in-sample ECE=%.4f (informational only)", method, ece)
+    log.info(
+        "Calibration (temperature T=%.4f) in-sample ECE=%.4f (informational only)",
+        cal.T, ece,
+    )
     if ece >= ECE_THRESHOLD:
         log.warning("Even in-sample ECE=%.4f >= %.2f — severe miscalibration", ece, ECE_THRESHOLD)
 
     return cal
 
 
-def save_calibrator(cal: PlattCalibrator, path: str) -> None:
+def save_calibrator(cal: TemperatureCalibrator, path: str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:
         pickle.dump(cal, f)
     log.info("Calibrator saved to %s", path)
 
 
-def load_calibrator(path: str) -> PlattCalibrator:
+def load_calibrator(path: str) -> TemperatureCalibrator:
     with open(path, "rb") as f:
         return pickle.load(f)
