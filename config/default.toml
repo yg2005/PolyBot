@@ -41,4 +41,4 @@ starting_bankroll_usd = 100.0
 db_path = "data/kalbot.db"
 log_all_windows = true
 tick_logging = true
-snapshot_at_seconds = [120, 150, 180, 210, 240]
+snapshot_at_seconds = [60, 90, 120, 150, 180]

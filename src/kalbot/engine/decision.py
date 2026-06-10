@@ -75,6 +75,15 @@ class DecisionEngine:
             )
             return _pass(f"entry_too_expensive: {score.signal} ask={entry_ask:.4f} > {self._max_entry_price:.2f}")
 
+        # 5c. Taker fee check: edge must exceed predictable taker cost
+        taker_fee_pct = 0.07 * entry_ask * (1.0 - entry_ask) * 100.0
+        net_edge_pct = edge_pct - taker_fee_pct
+        if net_edge_pct < self._min_edge_pct:
+            return _pass(
+                f"net_edge={net_edge_pct:.2f}% < min={self._min_edge_pct:.1f}% "
+                f"(fee={taker_fee_pct:.2f}%)"
+            )
+
         # 6. Kelly sizing — computed last; floor $5, hard ceiling from config
         size_usd = self._kelly_size(score, snapshot)
         if size_usd < MIN_SIZE_USD:

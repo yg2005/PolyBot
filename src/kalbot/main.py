@@ -286,8 +286,8 @@ class KalBot:
         if not market:
             return
 
-        # Refresh orderbook at each mid/late bucket so spread/depth stay current.
-        if bucket >= 120 and self._poly:
+        # Refresh orderbook at every snapshot bucket so spread/depth stay current.
+        if bucket >= 60 and self._poly:
             ob = await self._poly.fetch_orderbook(market)
             if ob:
                 self._last_ob = ob
@@ -372,6 +372,15 @@ class KalBot:
                         wid, side, strategy, entry, size, token_id=token_id,
                     )
 
+                # paper_realistic: fetch fresh OB and use real ask as fill price
+                if self._cfg.execution.mode == "paper_realistic" and self._poly is not None:
+                    fresh_ob = await self._poly.fetch_orderbook(market)
+                    if fresh_ob is not None:
+                        realistic_ask = fresh_ob.yes_ask if side == "YES" else fresh_ob.no_ask
+                        snap.realistic_fill_price = realistic_ask
+                        self._order_mgr.update_paper_fill_price(wid, realistic_ask)
+                        fill = realistic_ask
+
                 # Phase 10: reconcile live fill vs expected (fire-and-forget)
                 if (
                     self._live_monitor is not None
@@ -454,6 +463,11 @@ class KalBot:
             pnl = await self._order_mgr.settle_positions(fill_wid, outcome)
             pos = self._order_mgr.get_fill(fill_wid)
             if pos and pnl is not None:
+                if self._cfg.execution.mode == "paper_realistic":
+                    fp = pos["fill_price"]
+                    taker_fee = 0.07 * fp * (1.0 - fp) * pos["size_usd"]
+                    pnl -= taker_fee
+                    log.info("paper_realistic taker_fee=%.4f net_pnl=%.4f", taker_fee, pnl)
                 await self._db.update_trade_pnl(fill_wid, pnl)
                 log.info(
                     "Settlement | id=%s price=%.2f strike=%.2f outcome=%s pnl=%.4f",

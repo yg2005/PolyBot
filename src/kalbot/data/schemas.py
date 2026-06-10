@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS windows (
     trade_pnl REAL,
     rule_signal TEXT,
     model_prob REAL,
+    realistic_fill_price REAL,
     is_primary INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
 );

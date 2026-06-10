@@ -83,6 +83,7 @@ class Database:
             snapshot.trade_pnl,
             snapshot.rule_signal,
             snapshot.model_prob,
+            snapshot.realistic_fill_price,
             int(is_primary),
         )
         sql = """
@@ -104,11 +105,11 @@ class Database:
                 settlement_outcome, settlement_price,
                 traded, trade_side,
                 trade_entry_price, trade_fill_price, trade_pnl,
-                rule_signal, model_prob, is_primary
+                rule_signal, model_prob, realistic_fill_price, is_primary
             ) VALUES (
                 ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
                 ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-                ?,?,?,?,?,?,?,?,?
+                ?,?,?,?,?,?,?,?,?,?
             )
         """
         async with aiosqlite.connect(self._path) as db:
@@ -308,3 +309,5 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         await db.execute("ALTER TABLE windows ADD COLUMN is_primary INTEGER DEFAULT 0")
     if "momentum_slope_1min" not in existing:
         await db.execute("ALTER TABLE windows ADD COLUMN momentum_slope_1min REAL")
+    if "realistic_fill_price" not in existing:
+        await db.execute("ALTER TABLE windows ADD COLUMN realistic_fill_price REAL")

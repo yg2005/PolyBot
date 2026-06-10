@@ -114,6 +114,10 @@ class OrderManager:
             return self._live_fills.get(window_id)
         return self._paper.get_fill(window_id)
 
+    def update_paper_fill_price(self, window_id: str, new_price: float) -> None:
+        """Override paper fill price for paper_realistic mode."""
+        self._paper.update_fill_price(window_id, new_price)
+
     async def settle_positions(self, window_id: str, outcome: str) -> float | None:
         if self._mode == "live":
             pos = self._live_fills.get(window_id)
@@ -287,34 +291,23 @@ class OrderManager:
             log.error("Order rejected: code=%s  msg=%s", resp.code, resp.message)
             raise RuntimeError(f"Order rejected by CLOB: {resp.code} — {resp.message}")
 
-        order_id   = resp.order_id
-        fill_price: float | None = None
-        if resp.status == "matched":
-            fill_price = price
+        order_id = resp.order_id
+        # Taker orders: price is the ask, fill is immediate and known
+        fill_price: float = price
 
         self._live_order_meta[order_id] = (window_id, side, size_usd)
-        # Record fill for P&L tracking; use limit price as expected fill
         self._live_fills[window_id] = {
             "side": side,
-            "fill_price": fill_price if fill_price is not None else price,
+            "fill_price": fill_price,
             "size_usd": size_usd,
             "order_id": order_id,
             "token_id": token_id,
             "status": resp.status,
         }
         log.info(
-            "LiveOrder %s | %s %s @ %.4f size=%.2f status=%s token=%s...",
-            order_id, side, strategy, price, size_usd, resp.status, token_id[:12],
+            "LiveOrder %s | %s TAKER @ %.4f size=%.2f status=%s token=%s...",
+            order_id, side, price, size_usd, resp.status, token_id[:12],
         )
-
-        # If not immediately matched, schedule a deferred fill-price poll (5 s delay).
-        if resp.status != "matched":
-            async def _deferred_poll() -> None:
-                await asyncio.sleep(5)
-                confirmed = await self.poll_fill_price(order_id, window_id)
-                if confirmed is not None:
-                    log.info("LiveOrder fill confirmed: %s @ %.4f", order_id, confirmed)
-            asyncio.create_task(_deferred_poll(), name=f"FillPoll_{order_id}")
 
         return order_id, fill_price
 

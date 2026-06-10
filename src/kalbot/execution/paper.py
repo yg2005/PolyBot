@@ -173,6 +173,14 @@ class PaperExecutor:
     def get_order_status(self, order_id: str) -> PaperOrder | None:
         return self._orders.get(order_id)
 
+    def update_fill_price(self, window_id: str, new_price: float) -> None:
+        """Override fill price for a filled order (used by paper_realistic mode)."""
+        order_id = self._filled.get(window_id)
+        if order_id:
+            order = self._orders.get(order_id)
+            if order and order.state == OrderState.FILLED:
+                order.fill_price = new_price
+
     def get_fill(self, window_id: str) -> dict | None:
         """Return fill dict for a window if it has a filled order, else None."""
         order_id = self._filled.get(window_id)

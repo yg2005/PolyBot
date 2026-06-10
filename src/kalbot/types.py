@@ -81,6 +81,7 @@ class WindowSnapshot:
 
     rule_signal: str | None = None
     model_prob: float | None = None
+    realistic_fill_price: float | None = None
 
 
 @dataclass

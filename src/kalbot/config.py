@@ -75,8 +75,8 @@ class ExecutionConfig(BaseModel):
     @field_validator("mode")
     @classmethod
     def validate_mode(cls, v: str) -> str:
-        if v not in ("paper", "live"):
-            raise ValueError(f"execution.mode must be 'paper' or 'live', got {v!r}")
+        if v not in ("paper", "live", "paper_realistic"):
+            raise ValueError(f"execution.mode must be 'paper', 'live', or 'paper_realistic', got {v!r}")
         return v
 
 
@@ -94,7 +94,7 @@ class DataConfig(BaseModel):
     db_path: str = "data/kalbot.db"
     log_all_windows: bool = True
     tick_logging: bool = True
-    snapshot_at_seconds: list[int] = Field(default_factory=lambda: [120, 150, 180, 210, 240])
+    snapshot_at_seconds: list[int] = Field(default_factory=lambda: [60, 90, 120, 150, 180])
 
 
 class KalbotConfig(BaseModel):
