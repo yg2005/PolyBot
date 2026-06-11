@@ -45,7 +45,7 @@ class FeedsConfig(BaseModel):
 
 
 class EngineConfig(BaseModel):
-    min_elapsed_seconds: int = 60
+    min_elapsed_seconds: int = 120
     max_elapsed_seconds: int = 270
     min_displacement_pct: float = 0.02
     min_direction_consistency: float = 0.60
