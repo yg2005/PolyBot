@@ -29,6 +29,10 @@ class DecisionEngine:
         snapshot: WindowSnapshot,
     ) -> DecisionResult:
         def _pass(reason: str) -> DecisionResult:
+            log.info(
+                "GATE BLOCK | signal=%s elapsed=%ds | %s",
+                score.signal, snapshot.elapsed_seconds, reason,
+            )
             return DecisionResult(
                 action="PASS",
                 side=None,
@@ -46,12 +50,12 @@ class DecisionEngine:
         # 2. Edge > min_edge_pct
         edge_pct = score.edge_estimate * 100.0
         if edge_pct < self._min_edge_pct:
-            return _pass(f"edge={edge_pct:.2f}% < min={self._min_edge_pct:.1f}%")
+            return _pass(f"gate2_edge: {edge_pct:.2f}% < min={self._min_edge_pct:.1f}%")
 
         # 3. Risk manager gate (use default size; checks circuit breaker, positions, daily loss)
-        allowed, reason = self._risk.can_trade(self._default_size_usd)
+        allowed, risk_reason = self._risk.can_trade(self._default_size_usd)
         if not allowed:
-            return _pass(f"risk: {reason}")
+            return _pass(f"gate3_risk: {risk_reason}")
 
         # 4. Liquidity: bid/ask depth > default order size
         depth = (
@@ -60,58 +64,54 @@ class DecisionEngine:
             else snapshot.ask_depth_usd
         )
         if depth < self._default_size_usd:
-            return _pass(f"depth={depth:.2f} < size={self._default_size_usd:.2f}")
+            return _pass(
+                f"gate4_depth: {depth:.2f} < min={self._default_size_usd:.2f} "
+                f"(bid={snapshot.bid_depth_usd:.2f} ask={snapshot.ask_depth_usd:.2f})"
+            )
 
         # 5. Spread < $0.10
         if snapshot.spread > MAX_SPREAD_USD:
-            return _pass(f"spread={snapshot.spread:.4f} > max={MAX_SPREAD_USD}")
+            return _pass(f"gate5_spread: {snapshot.spread:.4f} > max={MAX_SPREAD_USD}")
 
         # 5b. Entry price cap: skip expensive tokens where 75% win rate is negative EV
         entry_ask = snapshot.yes_ask if score.signal == "YES" else snapshot.no_ask
         if entry_ask > self._max_entry_price:
-            log.info(
-                "PASS entry_too_expensive: %s ask=%.4f > max=%.2f",
-                score.signal, entry_ask, self._max_entry_price,
+            return _pass(
+                f"gate5b_price_cap: {score.signal} ask={entry_ask:.4f} > max={self._max_entry_price:.2f}"
             )
-            return _pass(f"entry_too_expensive: {score.signal} ask={entry_ask:.4f} > {self._max_entry_price:.2f}")
 
         # 5c. Taker fee check: edge must exceed predictable taker cost
-        taker_fee_pct = 0.07 * entry_ask * (1.0 - entry_ask) * 100.0
+        taker_fee_pct = 0.072 * entry_ask * (1.0 - entry_ask) * 100.0
         net_edge_pct = edge_pct - taker_fee_pct
         if net_edge_pct < self._min_edge_pct:
             return _pass(
-                f"net_edge={net_edge_pct:.2f}% < min={self._min_edge_pct:.1f}% "
-                f"(fee={taker_fee_pct:.2f}%)"
+                f"gate5c_net_edge: {net_edge_pct:.2f}% < min={self._min_edge_pct:.1f}% "
+                f"(gross={edge_pct:.2f}% fee={taker_fee_pct:.2f}%)"
             )
 
         # 6. Kelly sizing — computed last; floor $5, hard ceiling from config
+        # Clamp up to floor rather than reject: a $4.88 Kelly is still positive edge.
+        # Only reject at zero (f_star <= 0 means no edge by the model).
         size_usd = self._kelly_size(score, snapshot)
-        if size_usd < MIN_SIZE_USD:
-            return _pass(f"kelly_size={size_usd:.2f} < floor={MIN_SIZE_USD:.2f}")
-        size_usd = min(size_usd, self._max_live_stake_usd)
+        if size_usd <= 0:
+            return _pass(
+                f"gate6_kelly: f_star<=0 "
+                f"(signal={score.signal} conf={score.confidence:.3f} mid={snapshot.mid_price:.3f})"
+            )
+        size_usd = max(MIN_SIZE_USD, min(size_usd, self._max_live_stake_usd))
 
-        # 7. Strategy selection
-        remaining = snapshot.remaining_seconds
-        if remaining > 120:
-            strategy = "maker"
-        elif remaining >= 60:
-            strategy = "adaptive"
-        else:
-            # taker only if edge covers taker fee (approx 0.5% = 0.005)
-            if score.edge_estimate < 0.005:
-                return _pass(f"taker_edge={edge_pct:.2f}% insufficient for taker fee")
-            strategy = "taker"
+        # 7. Always taker — deterministic fill at the ask
+        strategy = "taker"
 
-        # Target entry price: bid for YES, ask for NO
-        target_price = snapshot.yes_bid if score.signal == "YES" else snapshot.no_bid
+        # Target entry price: ask for both sides
+        target_price = snapshot.yes_ask if score.signal == "YES" else snapshot.no_ask
 
         log.info(
-            "TRADE signal=%s edge=%.2f%% size=%.2f strategy=%s remaining=%ds",
+            "TRADE signal=%s edge=%.2f%% size=%.2f strategy=%s",
             score.signal,
             edge_pct,
             size_usd,
             strategy,
-            remaining,
         )
 
         return DecisionResult(
@@ -129,20 +129,31 @@ class DecisionEngine:
     # ------------------------------------------------------------------
 
     def _kelly_size(self, score: ScorerResult, snapshot: WindowSnapshot) -> float:
-        """f* = (p*b - q) / b, where b = net odds (payout - 1)."""
-        p = score.confidence  # P(win)
+        """f* = (p_win * b - p_lose) / b, where b = net odds (payout - 1).
+
+        score.confidence is ml_cal_prob = P(YES wins).
+        For a YES bet: p_win = cal_prob, market mid = yes_mid.
+        For a NO bet:  p_win = 1 - cal_prob, market mid = 1 - yes_mid (NO token implied prob).
+        """
+        is_yes = score.signal == "YES"
+        p = score.confidence if is_yes else 1.0 - score.confidence
         q = 1.0 - p
 
-        # mid_price is the market-implied probability; payout = 1/mid_price
-        mid = snapshot.mid_price
-        if mid <= 0 or mid >= 1:
+        mid_yes = snapshot.mid_price
+        if mid_yes <= 0 or mid_yes >= 1:
             return self._default_size_usd
 
+        # Implied probability for the side being bet on
+        mid = mid_yes if is_yes else 1.0 - mid_yes
         b = (1.0 / mid) - 1.0  # net odds
         if b <= 0:
             return self._default_size_usd
 
         f_star = (p * b - q) / b
+        log.debug(
+            "Kelly: signal=%s conf=%.3f p_win=%.3f mid=%.3f b=%.3f f*=%.3f",
+            score.signal, score.confidence, p, mid, b, f_star,
+        )
         if f_star <= 0:
             return 0.0
 

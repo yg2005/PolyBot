@@ -1,9 +1,18 @@
 [engine]
-scorer = "ml"
+scorer = "reaction"
+min_elapsed_seconds = 30
+spot_displacement_threshold = 0.06
+max_entry_elapsed_seconds = 90
+price_band_low = 0.55
+price_band_high = 0.72
 
 [execution]
-mode = "live"
-max_live_stake_usd = 1.0
+mode = "paper_realistic"
+max_live_stake_usd = 5.0
 
 [risk]
-max_entry_price = 0.65
+max_entry_price = 0.80
+min_edge_pct = 0.0
+
+[data]
+snapshot_at_seconds = [30, 45, 60, 90, 120, 150, 180]

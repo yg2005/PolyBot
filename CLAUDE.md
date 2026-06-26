@@ -39,5 +39,21 @@ Build phases in order. Each phase file is self-contained.
 - Run tools first, show result, then stop. Do not narrate.
 - Drop articles ("Me fix code" not "I will fix the code").
 
+## Runtime / DB
+- Main DB: `data/kalbot.db` — `windows` table = signals/trades, `orders` table = fills
+- A trade is `traded=1`; win = `trade_side` matches `settlement_outcome`
+- Config: `src/kalbot/config.py` (`min_elapsed_seconds=120`, `mode=paper`)
+- Service: `systemctl status kalbot`
+
+## Known open issues
+- Fee logging broken: ~91% of trades log $0 fees, paper PnL likely overstated
+- ~20% of orders stuck PENDING (possible unrealized/missed fills)
+- DailyStats aggregation throws NoneType error (non-fatal)
+
+## Reporting rules
+- Give fee-adjusted numbers; flag sample size every time.
+- Never switch to live mode without explicit instruction.
+- Do not edit config without being told explicitly.
+
 ## When compacting
 Preserve: current phase being built, list of files created/modified, any failing tests.

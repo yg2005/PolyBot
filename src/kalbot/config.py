@@ -45,7 +45,7 @@ class FeedsConfig(BaseModel):
 
 
 class EngineConfig(BaseModel):
-    min_elapsed_seconds: int = 120
+    min_elapsed_seconds: int = 30
     max_elapsed_seconds: int = 270
     min_displacement_pct: float = 0.02
     min_direction_consistency: float = 0.60
@@ -54,13 +54,19 @@ class EngineConfig(BaseModel):
     max_time_above_no: float = 0.45
     spot_trend_conflict_threshold: float = 0.0008
     require_spot_confirmation: bool = True
-    scorer: str = "rules"  # "rules" or "ml"
+    scorer: str = "rules"  # "rules", "ml", or "reaction"
+
+    # Reaction strategy params — tunable, not hard limits
+    spot_displacement_threshold: float = 0.10   # % spot move required to fire
+    max_entry_elapsed_seconds: int = 90          # hard cutoff — no entries after this
+    price_band_low: float = 0.55                 # skip if entry price below this
+    price_band_high: float = 0.72                # skip if entry price above this
 
     @field_validator("scorer")
     @classmethod
     def validate_scorer(cls, v: str) -> str:
-        if v not in ("rules", "ml"):
-            raise ValueError(f"engine.scorer must be 'rules' or 'ml', got {v!r}")
+        if v not in ("rules", "ml", "reaction"):
+            raise ValueError(f"engine.scorer must be 'rules', 'ml', or 'reaction', got {v!r}")
         return v
 
 
@@ -87,14 +93,16 @@ class RiskConfig(BaseModel):
     max_concurrent_positions: int = 2
     min_edge_pct: float = 3.0
     starting_bankroll_usd: float = 100.0
-    max_entry_price: float = 0.65  # skip trades where token ask exceeds this
+    max_entry_price: float = 0.80  # safety ceiling — ReactionScorer owns the real band
 
 
 class DataConfig(BaseModel):
     db_path: str = "data/kalbot.db"
     log_all_windows: bool = True
     tick_logging: bool = True
-    snapshot_at_seconds: list[int] = Field(default_factory=lambda: [60, 90, 120, 150, 180])
+    snapshot_at_seconds: list[int] = Field(
+        default_factory=lambda: [30, 45, 60, 90, 120, 150, 180]
+    )
 
 
 class KalbotConfig(BaseModel):

@@ -42,6 +42,12 @@ class RiskManager:
             peak_bankroll=self._starting_bankroll,
             current_bankroll=self._starting_bankroll,
         )
+        log.info(
+            "RiskManager init | bankroll=%.2f max_pos=%.2f max_daily_loss=%.2f "
+            "max_drawdown=%.1f%% max_concurrent=%d max_consec_losses=%d",
+            self._starting_bankroll, self._max_position_usd, self._max_daily_loss_usd,
+            self._max_drawdown_pct, self._max_concurrent, MAX_CONSECUTIVE_LOSSES,
+        )
 
         if risk.max_position_usd > MAX_POSITION_USD_HARD:
             log.warning(
@@ -69,23 +75,32 @@ class RiskManager:
     def can_trade(self, size_usd: float) -> tuple[bool, str]:
         """Check all risk gates. Returns (allowed, reason)."""
         self._maybe_reset_daily()
+        s = self._state
+        drawdown = self._current_drawdown_pct()
 
-        if self._state.circuit_breaker_active:
-            return False, f"circuit_breaker: {self._state.circuit_breaker_reason}"
+        def _state_ctx() -> str:
+            return (
+                f"open={s.open_positions}/{self._max_concurrent} "
+                f"daily_pnl={s.daily_pnl:.2f} consec_loss={s.consecutive_losses} "
+                f"drawdown={drawdown:.1f}% cb={s.circuit_breaker_active}"
+            )
 
-        if self._state.open_positions >= self._max_concurrent:
-            return False, f"max_concurrent={self._max_concurrent} reached"
+        if s.circuit_breaker_active:
+            return False, f"circuit_breaker: {s.circuit_breaker_reason} | {_state_ctx()}"
+
+        if s.open_positions >= self._max_concurrent:
+            return False, f"max_concurrent={self._max_concurrent} reached | {_state_ctx()}"
 
         if size_usd > self._max_position_usd:
-            return False, f"size={size_usd:.2f} > max_position={self._max_position_usd:.2f}"
+            return False, f"size={size_usd:.2f} > max_position={self._max_position_usd:.2f} | {_state_ctx()}"
 
-        if self._state.daily_pnl <= -self._max_daily_loss_usd:
-            return False, f"daily_loss={self._state.daily_pnl:.2f} hit limit={self._max_daily_loss_usd:.2f}"
+        if s.daily_pnl <= -self._max_daily_loss_usd:
+            return False, f"daily_loss={s.daily_pnl:.2f} hit limit={self._max_daily_loss_usd:.2f} | {_state_ctx()}"
 
-        drawdown = self._current_drawdown_pct()
         if drawdown >= self._max_drawdown_pct:
-            return False, f"drawdown={drawdown:.1f}% >= limit={self._max_drawdown_pct:.1f}%"
+            return False, f"drawdown={drawdown:.1f}% >= limit={self._max_drawdown_pct:.1f}% | {_state_ctx()}"
 
+        log.debug("can_trade ok | size=%.2f | %s", size_usd, _state_ctx())
         return True, "ok"
 
     def register_trade(self, size_usd: float) -> None:

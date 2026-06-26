@@ -79,6 +79,7 @@ class PaperExecutor:
         Taker fills immediately. Maker enters PENDING — caller must poll
         get_order_status or await simulate_maker_fill for the result.
         """
+        strategy = "taker"   # always deterministic taker fill in paper mode
         order_id = uuid.uuid4().hex[:8]
         now = datetime.now(timezone.utc)
 

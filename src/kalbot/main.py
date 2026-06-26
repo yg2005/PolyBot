@@ -286,8 +286,8 @@ class KalBot:
         if not market:
             return
 
-        # Refresh orderbook at every snapshot bucket so spread/depth stay current.
-        if bucket >= 60 and self._poly:
+        # Refresh orderbook at every snapshot — reaction entries need fresh prices at 30/45s.
+        if self._poly:
             ob = await self._poly.fetch_orderbook(market)
             if ob:
                 self._last_ob = ob
@@ -463,11 +463,11 @@ class KalBot:
             pnl = await self._order_mgr.settle_positions(fill_wid, outcome)
             pos = self._order_mgr.get_fill(fill_wid)
             if pos and pnl is not None:
-                if self._cfg.execution.mode == "paper_realistic":
+                if self._cfg.execution.mode in ("paper", "paper_realistic"):
                     fp = pos["fill_price"]
-                    taker_fee = 0.07 * fp * (1.0 - fp) * pos["size_usd"]
+                    taker_fee = 0.072 * fp * (1.0 - fp) * pos["size_usd"]
                     pnl -= taker_fee
-                    log.info("paper_realistic taker_fee=%.4f net_pnl=%.4f", taker_fee, pnl)
+                    log.info("taker_fee=%.4f net_pnl=%.4f", taker_fee, pnl)
                 await self._db.update_trade_pnl(fill_wid, pnl)
                 log.info(
                     "Settlement | id=%s price=%.2f strike=%.2f outcome=%s pnl=%.4f",
@@ -586,6 +586,24 @@ class KalBot:
                 )
             self._scorer = MLScorer.from_registry_row(model_row)
             log.info("Scorer: MLScorer (model_id=%s)", model_row["model_id"])
+        elif self._cfg.engine.scorer == "reaction":
+            from .engine.reaction_scorer import ReactionScorer
+            ml_scorer: MLScorer | None = None
+            model_row = await self._db.get_active_model_row()
+            if model_row:
+                ml_scorer = MLScorer.from_registry_row(model_row)
+                log.info("ReactionScorer: ML sub-scorer loaded for comparison logging")
+            else:
+                log.warning("ReactionScorer: no active ML model — ML comparison unavailable")
+            self._scorer = ReactionScorer(self._cfg.engine, ml_scorer)
+            log.info(
+                "Scorer: ReactionScorer "
+                "(threshold=%.2f%% max_elapsed=%ds band=[%.2f,%.2f])",
+                self._cfg.engine.spot_displacement_threshold,
+                self._cfg.engine.max_entry_elapsed_seconds,
+                self._cfg.engine.price_band_low,
+                self._cfg.engine.price_band_high,
+            )
         else:
             self._scorer = RuleScorer(self._tracker, fc.market_series_ticker, fc.chainlink_stale_threshold_s)
             log.info("Scorer: RuleScorer")
